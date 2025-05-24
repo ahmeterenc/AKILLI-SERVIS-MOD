@@ -1,7 +1,10 @@
 import gradio as gr
 import numpy as np
 import cv2
-
+import external_cameras as external
+import internal_cameras as internal
+import psutil
+import os
 
 # Resmi oku ve fallback döndür
 def read_image(path):
@@ -14,13 +17,20 @@ def read_image(path):
     except:
         return np.ones((360, 640, 3), dtype=np.uint8) * 150
 
+def print_memory_usage():
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info().rss / 1024 ** 2  # MB cinsinden
+    print(f"📊 RAM Kullanımı: {mem:.2f} MB")
 
 # Hepsini döndüren fonksiyon
 def update_view():
+    internal.capture()
+    external.capture()
     cam1 = read_image("external_cameras/cam1_output.jpg")
-    cam2 = read_image("external_cameras/cam2_output.jpg")
-    cam3 = read_image("external_cameras/cam3_output.jpg")
-    seat = read_image("internal_cameras/seat_output.jpg")
+    cam2 = read_image("external_cameras/cam1_output.jpg")
+    cam3 = read_image("external_cameras/cam1_output.jpg")
+    seat = read_image("internal_cameras/seat_simulation.jpg")
+    print_memory_usage()
     return cam1, cam2, cam3, seat
 
 
@@ -37,7 +47,7 @@ with gr.Blocks(css=".gradio-container {height: 100vh !important}") as demo:
         seat_map = gr.Image(label="Koltuk Düzeni (İç Kamera)", interactive=False)
 
     # Timer oluştur
-    timer = gr.Timer(0.2, active=True)
+    timer = gr.Timer(0.02, active=True)
 
     # tick: her tetiklenmede 4 bileşeni güncelle
     timer.tick(fn=update_view, outputs=[cam1, cam2, cam3, seat_map])

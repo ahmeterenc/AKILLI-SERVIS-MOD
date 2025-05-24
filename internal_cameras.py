@@ -1,88 +1,55 @@
 import cv2
 import numpy as np
-from ultralytics import YOLO
-import os
+import random
 import time
+import os
 
 # ========== Ayarlar ==========
-CAM_ID = 0  # iç kamera ID'si
-SAVE_PATH = "internal_cameras/seat_output.jpg"
+ROWS = 4
+SEATS_PER_ROW = [3, 3, 4, 4]  # Toplam 14 koltuk
+SAVE_PATH = "internal_cameras/seat_simulation.jpg"
 
-# Koltuk durumu -> renk
+# Durum renkleri
 COLOR_MAP = {
     "empty": (180, 180, 180),
     "occupied": (0, 0, 255),
     "belted": (0, 255, 0)
 }
 
-# ========== Fonksiyonlar ==========
+SEAT_STATUSES = ["empty", "occupied", "belted"]
 
-def get_seat_boxes(results, class_prefix="seat_"):
-    seat_boxes = []
-    for box in results[0].boxes:
-        cls_name = results[0].names[int(box.cls)]
-        if cls_name.startswith(class_prefix):
-            seat_boxes.append({
-                "label": cls_name,  # e.g., seat_belted
-                "box": box.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
-            })
-    return seat_boxes
+def generate_seat_states():
+    return [random.choice(SEAT_STATUSES) for _ in range(sum(SEATS_PER_ROW))]
 
-def assign_seat_ids(seat_boxes):
-    # Y1 koordinatına göre sırala
-    sorted_boxes = sorted(seat_boxes, key=lambda b: b["box"][1])
-    for i, b in enumerate(sorted_boxes):
-        b["seat_id"] = f"seat_{i+1}"
-    return sorted_boxes
+def draw_seat_layout(states):
+    width, height = 800, 400
+    img = np.ones((height, width, 3), dtype=np.uint8) * 255
 
-def draw_dynamic_seats(frame, seat_boxes):
-    for b in seat_boxes:
-        x1, y1, x2, y2 = map(int, b["box"])
-        status = b["label"].split("_")[1]
-        color = COLOR_MAP.get(status, (100, 100, 100))
+    margin_x, margin_y = 50, 50
+    seat_width, seat_height = 60, 60
+    gap_x, gap_y = 30, 30
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(frame, b["seat_id"] + "_" + status, (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    return frame
+    seat_idx = 0
+    for row_idx, seats_in_row in enumerate(SEATS_PER_ROW):
+        for seat_pos in range(seats_in_row):
+            x = margin_x + seat_pos * (seat_width + gap_x)
+            y = margin_y + row_idx * (seat_height + gap_y)
 
-# ========== Ana Döngü ==========
+            status = states[seat_idx]
+            color = COLOR_MAP[status]
 
-def run_seat_detection():
-    print("🚗 Koltuk denetleyici başlatılıyor...")
+            cv2.rectangle(img, (x, y), (x + seat_width, y + seat_height), color, -1)
+            cv2.putText(img, f"{seat_idx+1}", (x + 5, y + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+            cv2.putText(img, status, (x + 5, y + 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 50, 50), 1)
 
-    if not os.path.exists("internal_cameras"):
-        os.makedirs("internal_cameras")
+            seat_idx += 1
 
-    cap = cv2.VideoCapture(CAM_ID)
-    model = YOLO("seat_model.pt")  # kendi eğittiğin modelin adı
+    return img
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Kamera görüntüsü alınamadı.")
-            continue
-
-        results = model(frame)
-
-        # Koltuk kutularını al
-        seat_boxes = get_seat_boxes(results)
-
-        # ID ata
-        seat_boxes = assign_seat_ids(seat_boxes)
-
-        # Çiz
-        annotated = draw_dynamic_seats(frame.copy(), seat_boxes)
-
-        # Kaydet
-        cv2.imwrite(SAVE_PATH, annotated)
-        print(f"💾 Görsel kaydedildi: {SAVE_PATH}")
-
-        time.sleep(2.0)  # 2 saniyede bir güncelle
-
-    cap.release()
-
-# ========== Başlat ==========
-
-if __name__ == "__main__":
-    run_seat_detection()
+def capture():
+    seat_states = generate_seat_states()
+    img = draw_seat_layout(seat_states)
+    cv2.imwrite(SAVE_PATH, img)
+    print(f"🔄 Görsel güncellendi: {SAVE_PATH}")
