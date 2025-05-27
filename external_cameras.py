@@ -1,5 +1,5 @@
 import cv2
-from ultralytics import YOLO
+import torch
 import time
 
 # Kamera kaynakları
@@ -9,8 +9,16 @@ cams = {
     "cam3": cv2.VideoCapture(2),
 }
 
-# YOLOv8 modelini yükle
-model = YOLO("yolov8n.pt")
+# YOLOv5s modelini yükle (ultralytics/yolov5 formatında)
+model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+
+# İlgi duyulan sınıflar ve Türkçe karşılıkları
+TARGET_CLASSES = {
+    0: "Insan",      # person
+    2: "Araba",      # car
+    16: "Kedi",      # cat
+    17: "Kopek",     # dog
+}
 
 def capture():
     for name, cap in cams.items():
@@ -18,20 +26,19 @@ def capture():
         if not ret:
             continue
 
-        results = model(frame)[0]  # İlk kare sonuçları
-        person_boxes = []
-        for box, cls in zip(results.boxes.xyxy, results.boxes.cls):
-            if int(cls) == 0:  # 0 = person
-                person_boxes.append(box)
+        # Modeli çalıştır
+        results = model(frame)
+        detections = results.pred[0]  # Tüm kutular (x1, y1, x2, y2, conf, cls)
 
-        # Yeni bir boş görsel oluştur
-        person_frame = frame.copy()
+        frame_copy = frame.copy()
 
-        # Sadece person olanları çiz
-        for box in person_boxes:
-            x1, y1, x2, y2 = map(int, box)
-            cv2.rectangle(person_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(person_frame, "person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9, (0, 255, 0), 2)
+        for *box, conf, cls in detections:
+            cls_id = int(cls)
+            if cls_id in TARGET_CLASSES:
+                x1, y1, x2, y2 = map(int, box)
+                label = TARGET_CLASSES[cls_id]
+                cv2.rectangle(frame_copy, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame_copy, label, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-        cv2.imwrite(f"external_cameras/{name}_output.jpg", person_frame)
+        cv2.imwrite(f"external_cameras/{name}_output.jpg", frame_copy)
