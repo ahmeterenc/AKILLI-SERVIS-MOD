@@ -47,7 +47,7 @@ with gr.Blocks(css=".gradio-container {height: 100vh !important}") as demo:
         seat_map = gr.Image(label="Koltuk Düzeni (İç Kamera)", interactive=False)
 
     # Timer oluştur
-    timer = gr.Timer(0.001, active=True)
+    timer = gr.Timer(0.1, active=True)
 
     # tick: her tetiklenmede 4 bileşeni güncelle
     timer.tick(fn=update_view, outputs=[cam1, cam2, cam3, seat_map])

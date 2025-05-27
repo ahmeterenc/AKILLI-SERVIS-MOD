@@ -1,18 +1,23 @@
 import cv2
 import torch
-import time
+import os
 
-# Kamera kaynakları
-cams = {
-    "cam1": cv2.VideoCapture(0),
-    "cam2": cv2.VideoCapture(1),
-    "cam3": cv2.VideoCapture(2),
-}
+# Kullanmak istediğin video cihazları (0, 2, 4 gibi)
+device_ids = [0, 2, 4]
 
-# YOLOv5s modelini yükle (ultralytics/yolov5 formatında)
+# Kameraları aç, düzgün açılmayan olursa bildir
+cams = {}
+for i, dev_id in enumerate(device_ids, start=1):
+    cap = cv2.VideoCapture(dev_id)
+    if not cap.isOpened():
+        print(f"[HATA] Kamera /dev/video{dev_id} açılamadı!")
+    else:
+        cams[f"cam{i}"] = cap
+        print(f"Kamera /dev/video{dev_id} başarıyla açıldı.")
+
+# YOLOv5s modelini yükle
 model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
 
-# İlgi duyulan sınıflar ve Türkçe karşılıkları
 TARGET_CLASSES = {
     0: "Insan",      # person
     2: "Araba",      # car
@@ -20,15 +25,22 @@ TARGET_CLASSES = {
     17: "Kopek",     # dog
 }
 
+# Kayıt klasörü varsa yoksa oluştur
+output_dir = "external_cameras"
+os.makedirs(output_dir, exist_ok=True)
+
 def capture():
     for name, cap in cams.items():
         ret, frame = cap.read()
         if not ret:
+            print(f"[UYARI] {name} kamerasından frame alınamadı.")
             continue
 
-        # Modeli çalıştır
+        # Opsiyonel: frame boyutlandır (performans için)
+        # frame = cv2.resize(frame, (640, 480))
+
         results = model(frame)
-        detections = results.pred[0]  # Tüm kutular (x1, y1, x2, y2, conf, cls)
+        detections = results.pred[0]
 
         frame_copy = frame.copy()
 
@@ -41,4 +53,7 @@ def capture():
                 cv2.putText(frame_copy, label, (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-        cv2.imwrite(f"external_cameras/{name}_output.jpg", frame_copy)
+        # Görüntüyü kaydet
+        output_path = os.path.join(output_dir, f"{name}_output.jpg")
+        cv2.imwrite(output_path, frame_copy)
+        print(f"{name} için çıktı kaydedildi: {output_path}")
