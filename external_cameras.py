@@ -5,6 +5,8 @@ import time
 # Kamera kaynakları
 cams = {
     "cam1": cv2.VideoCapture(0),
+    "cam2": cv2.VideoCapture(1),
+    "cam3": cv2.VideoCapture(2),
 }
 
 # YOLOv8 modelini yükle

@@ -27,8 +27,8 @@ def update_view():
     internal.capture()
     external.capture()
     cam1 = read_image("external_cameras/cam1_output.jpg")
-    cam2 = read_image("external_cameras/cam1_output.jpg")
-    cam3 = read_image("external_cameras/cam1_output.jpg")
+    cam2 = read_image("external_cameras/cam2_output.jpg")
+    cam3 = read_image("external_cameras/cam3_output.jpg")
     seat = read_image("internal_cameras/seat_simulation.jpg")
     print_memory_usage()
     return cam1, cam2, cam3, seat
