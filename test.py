@@ -25,7 +25,7 @@ class CameraViewer:
         self.update_images()
 
     def update_images(self):
-        external.capture()
+        external.capture_one()
         internal.capture()
         paths = [
             "external_cameras/cam1_output.jpg",
@@ -40,7 +40,7 @@ class CameraViewer:
                 tk_img = ImageTk.PhotoImage(img)
                 self.labels[i].config(image=tk_img)
                 self.labels[i].image = tk_img
-        self.window.after(1000, self.update_images)
+        self.window.after(10, self.update_images)
         print_memory_usage() 
 
 root = tk.Tk()

@@ -1,9 +1,9 @@
 import cv2
 import torch
 import os
-
+import itertools
 # Kullanmak istediğin video cihazları (0, 2, 4 gibi)
-device_ids = [0, 2, 4]
+device_ids = [0]
 
 # Kameraları aç, düzgün açılmayan olursa bildir
 cams = {}
@@ -28,6 +28,31 @@ TARGET_CLASSES = {
 # Kayıt klasörü varsa yoksa oluştur
 output_dir = "external_cameras"
 os.makedirs(output_dir, exist_ok=True)
+
+cam_cycle = itertools.cycle(cams.items())
+
+def capture_one():
+    name, cap = next(cam_cycle)
+    ret, frame = cap.read()
+    if not ret:
+        print(f"[UYARI] {name} için kare alınamadı.")
+        return
+
+    frame = cv2.resize(frame, (416, 416))
+    results = model(frame)
+    detections = results.pred[0]
+
+    for *box, conf, cls in detections:
+        if int(cls) in TARGET_CLASSES:
+            x1, y1, x2, y2 = map(int, box)
+            label = TARGET_CLASSES[int(cls)]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+
+    output_path = os.path.join(output_dir, f"{name}_output.jpg")
+    cv2.imwrite(output_path, frame)
+    print(f"✅ {name} → Kaydedildi: {output_path}")
 
 def capture():
     for name, cap in cams.items():
