@@ -1,5 +1,4 @@
 import sys
-
 import zmq
 import tkinter as tk
 from PIL import Image, ImageTk
@@ -11,17 +10,18 @@ import os
 import time
 import simpleaudio as sa
 import torch
+from queue import Queue
 
 # ========== MODEL ==========
 TARGET_CLASSES = {
-    0: "person",
-    2: "car",
-    16: "cat",
-    17: "dog"
+    0: "insan",
+    2: "arac",
+    16: "kedi",
+    17: "kopek"
 }
 
 model = torch.hub.load('ultralytics/yolov5', 'yolov5s', trust_repo=True)
-model.eval()
+model.to("cpu").eval()
 
 # ========== ZMQ Ayarları ==========
 context = zmq.Context()
@@ -40,15 +40,22 @@ alerts = {
     "cam3": ""
 }
 
+annotated_frames = {
+    "cam1": None,
+    "cam2": None,
+    "cam3": None
+}
+
+# ========== Bellek Kontrol ==========
 def print_memory_usage():
     process = psutil.Process(os.getpid())
     mem = process.memory_info().rss / 1024 ** 2
     print(f"📊 RAM Kullanımı: {mem:.2f} MB")
-
-    if mem > 2048:  # 2 GB = 2048 MB
+    if mem > 2048:
         print("❌ RAM kullanımı 2 GB'ı aştı. Uygulama sonlandırılıyor...")
         sys.exit(1)
 
+# ========== Uyarı Sesi ==========
 def play_alert():
     try:
         wave_obj = sa.WaveObject.from_wave_file("alert.wav")
@@ -56,17 +63,34 @@ def play_alert():
     except Exception as e:
         print(f"[Ses Hatası] {e}")
 
-def analyze_frame(cam_name, frame):
-    frame_resized = cv2.resize(frame, (320, 240))
-    results = model(frame_resized)
-    found = any(int(cls) in TARGET_CLASSES for cls in results.xyxy[0][:, -1])
-    if found:
-        alerts[cam_name] = "🚨 TESPİT VAR"
-        play_alert()
-    else:
-        alerts[cam_name] = ""
+# ========== Frame Kuyruğu ==========
+frame_queue = Queue(maxsize=10)
 
-# ========== ZMQ Alıcı Thread ==========
+def analyze_worker():
+    while True:
+        cam_name, frame = frame_queue.get()
+        try:
+            frame_resized = cv2.resize(frame, (320, 240))
+            results = model(frame_resized)
+
+            found = False
+            for *xyxy, conf, cls in results.xyxy[0]:
+                cls_id = int(cls)
+                if cls_id in TARGET_CLASSES:
+                    found = True
+                    x1, y1, x2, y2 = map(int, xyxy)
+                    label = TARGET_CLASSES[cls_id]
+                    cv2.rectangle(frame_resized, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    cv2.putText(frame_resized, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+            alerts[cam_name] = "🚨 TESPİT VAR" if found else ""
+            annotated_frames[cam_name] = frame_resized.copy()
+
+        except Exception as e:
+            print(f"[Analyze Hata] {e}")
+        frame_queue.task_done()
+
+# ========== ZMQ Alıcı ==========
 def zmq_receiver():
     while True:
         try:
@@ -78,7 +102,8 @@ def zmq_receiver():
 
             if frame is not None and cam_name in latest_frames:
                 latest_frames[cam_name] = frame
-                threading.Thread(target=analyze_frame, args=(cam_name, frame), daemon=True).start()
+                if not frame_queue.full():
+                    frame_queue.put((cam_name, frame))
         except Exception as e:
             print(f"[HATA] ZMQ alım hatası: {e}")
 
@@ -105,7 +130,7 @@ class CameraViewer:
         self.update_images()
 
     def update_images(self):
-        for cam_name, frame in latest_frames.items():
+        for cam_name, frame in annotated_frames.items():
             if frame is not None:
                 img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(img)
@@ -118,8 +143,9 @@ class CameraViewer:
         print_memory_usage()
         self.window.after(100, self.update_images)
 
-# ========== Uygulamayı Başlat ==========
+# ========== Başlat ==========
 if __name__ == "__main__":
+    threading.Thread(target=analyze_worker, daemon=True).start()
     threading.Thread(target=zmq_receiver, daemon=True).start()
     root = tk.Tk()
     app = CameraViewer(root)
