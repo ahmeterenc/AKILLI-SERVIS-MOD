@@ -8,8 +8,8 @@ from queue import Queue
 CAMERA_IDS = [0, 2, 4]
 CAMERA_NAMES = ["cam1", "cam2", "cam3"]
 ZMQ_SERVER_ADDR = "tcp://192.168.137.1:5555"  # Xiaomi'nin IP adresi
-QUEUE_MAX_SIZE = 30
-TARGET_FPS = 12
+QUEUE_MAX_SIZE = 12
+TARGET_FPS = 4
 
 context = zmq.Context()
 msg_queue = Queue(maxsize=QUEUE_MAX_SIZE)
@@ -21,7 +21,7 @@ def capture_single_camera(cam_id, cam_name):
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
     cap.set(cv2.CAP_PROP_FPS, TARGET_FPS)
 
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 60]
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 50]
 
     while True:
         ret, frame = cap.read()
@@ -49,7 +49,7 @@ def zmq_sender():
             except Exception as e:
                 print(f"[HATA] Gönderilemedi: {e}")
         else:
-            time.sleep(0.005)
+            time.sleep(1/TARGET_FPS)
 
 # ========== Thread Başlatmaları ==========
 for cam_id, cam_name in zip(CAMERA_IDS, CAMERA_NAMES):
