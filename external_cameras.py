@@ -33,27 +33,27 @@ def capture():
     for name, cap in cams.items():
         ret, frame = cap.read()
         if not ret:
-            print(f"[UYARI] {name} kamerasından frame alınamadı.")
+            print(f"[UYARI] {name} için kare alınamadı.")
             continue
 
-        # Opsiyonel: frame boyutlandır (performans için)
-        # frame = cv2.resize(frame, (640, 480))
+        # Performans için çözünürlüğü küçült
+        frame = cv2.resize(frame, (416, 416))
 
+        # YOLO tahmini
         results = model(frame)
         detections = results.pred[0]
 
-        frame_copy = frame.copy()
-
+        # Tespit edilen nesneler üzerinden çizim yap
         for *box, conf, cls in detections:
             cls_id = int(cls)
             if cls_id in TARGET_CLASSES:
                 x1, y1, x2, y2 = map(int, box)
                 label = TARGET_CLASSES[cls_id]
-                cv2.rectangle(frame_copy, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame_copy, label, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, label, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
 
-        # Görüntüyü kaydet
+        # Sonuçları kaydet
         output_path = os.path.join(output_dir, f"{name}_output.jpg")
-        cv2.imwrite(output_path, frame_copy)
-        print(f"{name} için çıktı kaydedildi: {output_path}")
+        cv2.imwrite(output_path, frame)
+        print(f"✅ {name} → Kaydedildi: {output_path}")

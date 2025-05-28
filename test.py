@@ -1,41 +1,48 @@
+import tkinter as tk
+from PIL import Image, ImageTk
 import cv2
-from ultralytics import YOLO
-import time
+import os
+import external_cameras as external
+import internal_cameras as internal
+import psutil
 
-# Kamera kaynakları
-cams = {
-    "cam1": cv2.VideoCapture(0),
-    "cam2": cv2.VideoCapture(1),
-    "cam3": cv2.VideoCapture(2),
-}
+def print_memory_usage():
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info().rss / 1024 ** 2  # MB cinsinden
+    print(f"📊 RAM Kullanımı: {mem:.2f} MB")
 
-# YOLOv8 modelini yükle
-model = YOLO("yolov8n.pt")
+class CameraViewer:
+    def __init__(self, window):
+        self.window = window
+        self.window.title("Kamera İzleyici")
 
-def capture():
-    for name, cap in cams.items():
-        ret, frame = cap.read()
-        if not ret:
-            continue
+        self.labels = []
+        for i in range(4):
+            label = tk.Label(window)
+            label.grid(row=i//2, column=i%2, padx=10, pady=10)
+            self.labels.append(label)
 
-        results = model(frame)[0]  # İlk kare sonuçları
-        person_boxes = []
-        for box, cls in zip(results.boxes.xyxy, results.boxes.cls):
-            if int(cls) == 0:  # 0 = person
-                person_boxes.append(box)
+        self.update_images()
 
-        # Yeni bir boş görsel oluştur
-        person_frame = frame.copy()
+    def update_images(self):
+        external.capture()
+        internal.capture()
+        paths = [
+            "external_cameras/cam1_output.jpg",
+            "external_cameras/cam2_output.jpg",
+            "external_cameras/cam3_output.jpg",
+            "internal_cameras/seat_simulation.jpg"
+        ]
+        for i, path in enumerate(paths):
+            if os.path.exists(path):
+                img = Image.open(path)
+                img = img.resize((320, 240))
+                tk_img = ImageTk.PhotoImage(img)
+                self.labels[i].config(image=tk_img)
+                self.labels[i].image = tk_img
+        self.window.after(1000, self.update_images)
+        print_memory_usage() 
 
-        # Sadece person olanları çiz
-        for box in person_boxes:
-            x1, y1, x2, y2 = map(int, box)
-            cv2.rectangle(person_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(person_frame, "person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9, (0, 255, 0), 2)
-
-        cv2.imwrite(f"external_cameras/{name}_output.jpg", person_frame)
-
-
-if __name__ == '__main__':
-    capture()
+root = tk.Tk()
+app = CameraViewer(root)
+root.mainloop()
