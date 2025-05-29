@@ -1,0 +1,11 @@
+# Raspberry Pi 4 için optimized requirements
+# pip install -r requirements_pi4.txt
+
+numpy==1.24.3
+opencv-python==4.8.1.78
+pyzmq==25.1.0
+Pillow==10.0.0
+
+# Pi 4'te daha stabil çalışan versiyonlar
+# OpenCV 4.8.x Pi 4'te test edilmiş
+# NumPy 1.24.x Pi ARM için optimize 

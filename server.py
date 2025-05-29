@@ -20,13 +20,29 @@ TARGET_CLASSES = {
     17: "kopek"
 }
 
-model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
-model.to("cpu").eval()
+# Yerel model dosyasını kullan
+try:
+    from ultralytics import YOLO
+    model = YOLO('yolov5s.pt')
+    print("✅ Model başarıyla yüklendi (YOLO)")
+except ImportError:
+    # Fallback: torch ile yerel model yükle
+    model = torch.hub.load('ultralytics/yolov5', 'custom', path='yolov5s.pt', force_reload=True)
+    model.to("cpu").eval()
+    print("✅ Model başarıyla yüklendi (torch)")
+except Exception as e:
+    print(f"❌ Model yükleme hatası: {e}")
+    sys.exit(1)
 
 # ========== ZMQ Ayarları ==========
 context = zmq.Context()
 socket = context.socket(zmq.PULL)
+
+# Bağlantı ayarları - Pi 4 için optimize
+socket.setsockopt(zmq.RCVHWM, 100)  # Receive buffer
+socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1 saniye timeout
 socket.bind("tcp://*:5555")
+print("🌐 ZMQ Server başlatıldı: tcp://*:5555")
 
 latest_frames = {
     "cam1": None,
@@ -71,20 +87,42 @@ def analyze_worker():
         cam_name, frame = frame_queue.get()
         try:
             frame_resized = cv2.resize(frame, (320, 240))
+            
+            # Model ile tahmin yap
             results = model(frame_resized)
-
+            
             found = False
-            for *xyxy, conf, cls in results.xyxy[0]:
-                cls_id = int(cls)
-                if cls_id in TARGET_CLASSES:
-                    found = True
-                    x1, y1, x2, y2 = map(int, xyxy)
-                    label = TARGET_CLASSES[cls_id]
-                    cv2.rectangle(frame_resized, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                    cv2.putText(frame_resized, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            
+            # YOLO v8 (ultralytics) formatı kontrolü
+            if hasattr(results, '__iter__') and len(results) > 0:
+                result = results[0]
+                if hasattr(result, 'boxes') and result.boxes is not None:
+                    # YOLO v8 formatı
+                    for box in result.boxes:
+                        cls_id = int(box.cls[0])
+                        if cls_id in TARGET_CLASSES:
+                            found = True
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            conf = float(box.conf[0])
+                            label = f"{TARGET_CLASSES[cls_id]} {conf:.2f}"
+                            cv2.rectangle(frame_resized, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                            cv2.putText(frame_resized, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                else:
+                    # YOLO v5 formatı fallback
+                    for *xyxy, conf, cls in results.xyxy[0]:
+                        cls_id = int(cls)
+                        if cls_id in TARGET_CLASSES:
+                            found = True
+                            x1, y1, x2, y2 = map(int, xyxy)
+                            label = f"{TARGET_CLASSES[cls_id]} {conf:.2f}"
+                            cv2.rectangle(frame_resized, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                            cv2.putText(frame_resized, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
             alerts[cam_name] = "🚨 TESPİT VAR" if found else ""
             annotated_frames[cam_name] = frame_resized.copy()
+            
+            if found:
+                threading.Thread(target=play_alert, daemon=True).start()
 
         except Exception as e:
             print(f"[Analyze Hata] {e}")
@@ -92,20 +130,60 @@ def analyze_worker():
 
 # ========== ZMQ Alıcı ==========
 def zmq_receiver():
-    while True:
+    print("📡 ZMQ alıcı başlatıldı...")
+    consecutive_errors = 0
+    max_errors = 20
+    
+    while consecutive_errors < max_errors:
         try:
-            message = socket.recv_json()
-            cam_name = message["cam"]
-            img_bytes = bytes.fromhex(message["img"])
-            npimg = np.frombuffer(img_bytes, dtype=np.uint8)
-            frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+            # Timeout ile mesaj al
+            message = socket.recv_json(zmq.NOBLOCK)
+            consecutive_errors = 0  # Başarılı alım
+            
+            cam_name = message.get("cam", "unknown")
+            img_hex = message.get("img", "")
+            
+            if not img_hex:
+                print(f"⚠️ Boş frame alındı: {cam_name}")
+                continue
+                
+            try:
+                img_bytes = bytes.fromhex(img_hex)
+                npimg = np.frombuffer(img_bytes, dtype=np.uint8)
+                frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
 
-            if frame is not None and cam_name in latest_frames:
-                latest_frames[cam_name] = frame
-                if not frame_queue.full():
-                    frame_queue.put((cam_name, frame))
+                if frame is not None and cam_name in latest_frames:
+                    latest_frames[cam_name] = frame
+                    print(f"📸 Frame alındı: {cam_name} ({frame.shape})")
+                    
+                    # Analiz kuyruğuna ekle
+                    if not frame_queue.full():
+                        frame_queue.put((cam_name, frame))
+                    else:
+                        print(f"⚠️ Analiz kuyruğu dolu: {cam_name}")
+                else:
+                    print(f"❌ Frame decode edilemedi: {cam_name}")
+                    
+            except ValueError as e:
+                print(f"❌ Hex decode hatası ({cam_name}): {e}")
+            except Exception as e:
+                print(f"❌ Frame işleme hatası ({cam_name}): {e}")
+                
+        except zmq.Again:
+            # Timeout - normal durum
+            time.sleep(0.01)  # Kısa bekleme
+        except zmq.ZMQError as e:
+            consecutive_errors += 1
+            print(f"❌ ZMQ hatası ({consecutive_errors}/{max_errors}): {e}")
+            time.sleep(0.1)
         except Exception as e:
-            print(f"[HATA] ZMQ alım hatası: {e}")
+            consecutive_errors += 1
+            print(f"❌ Genel alım hatası ({consecutive_errors}/{max_errors}): {e}")
+            time.sleep(0.5)
+
+    print("💀 ZMQ alıcı çok fazla hata aldı, sonlandırılıyor")
+    socket.close()
+    context.term()
 
 # ========== Tkinter Arayüz ==========
 class CameraViewer:
