@@ -20,7 +20,7 @@ TARGET_CLASSES = {
     17: "kopek"
 }
 
-model = torch.hub.load('ultralytics/yolov5', 'yolov5s', trust_repo=True)
+model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 model.to("cpu").eval()
 
 # ========== ZMQ Ayarları ==========
