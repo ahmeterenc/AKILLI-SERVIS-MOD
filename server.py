@@ -23,10 +23,10 @@ class Config:
     SEAT_MODEL_PATH = "seat_model.pt"
     SAVE_PATH = "internal_cameras/seat_simulation.jpg"
     
-    # Performance optimizations
-    GUI_UPDATE_INTERVAL = 200  # milliseconds (reduced from 500 for faster updates)
-    FRAME_QUEUE_SIZE = 20      # increased from 10
-    ANALYSIS_SKIP_FRAMES = 2   # process every 2nd frame for cam4 to speed up
+    # Performance optimizations (Reduced latency)
+    GUI_UPDATE_INTERVAL = 100  # milliseconds (reduced from 200 for even faster updates)
+    FRAME_QUEUE_SIZE = 10      # Reduced from 20 for lower latency
+    ANALYSIS_SKIP_FRAMES = 1   # Process every frame for cam4 (no skipping)
     RESIZE_BEFORE_ANALYSIS = True  # resize frames before analysis
     ANALYSIS_SIZE = (160, 120) # smaller size for faster analysis
 
@@ -321,43 +321,81 @@ def save_seat_simulation(img_array, save_path=None):
         print(f"❌ Koltuk simülasyonu kaydetme hatası: {e}")
         return False
 
-# ========== ZMQ Receiver ==========
+# ========== ZMQ Receiver (Optimized for low latency) ==========
 def zmq_receiver(data_manager, frame_queue):
     context = zmq.Context()
     socket = context.socket(zmq.PULL)
+    
+    # Optimize ZMQ for low latency
+    socket.setsockopt(zmq.RCVHWM, 5)  # High water mark
+    socket.setsockopt(zmq.LINGER, 0)  # Don't wait on close
     socket.bind("tcp://*:5555")
+    
+    print("📡 ZMQ alıcısı düşük gecikme modunda başlatıldı")
+    received_count = 0
+    start_time = time.time()
+    
     while True:
         try:
-            message = socket.recv_json()
-            cam_name = message["cam"]
-            img_bytes = bytes.fromhex(message["img"])
-            npimg = np.frombuffer(img_bytes, dtype=np.uint8)
-            frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-            if frame is not None:
-                # cam4 is internal camera for seat detection, others starting with "cam" are external
-                if cam_name == "cam4":
-                    cam_type = "internal"
-                elif cam_name.startswith("cam"):
-                    cam_type = "external"
-                else:
-                    cam_type = "internal"
+            # Non-blocking receive with short timeout
+            if socket.poll(timeout=1):  # 1ms timeout
+                message = socket.recv_json(zmq.NOBLOCK)
+                received_count += 1
                 
-                data_manager.add_frame(cam_type, cam_name, frame)
-                if not frame_queue.full():
-                    frame_queue.put((cam_name, frame))
+                cam_name = message["cam"]
+                img_bytes = bytes.fromhex(message["img"])
+                npimg = np.frombuffer(img_bytes, dtype=np.uint8)
+                frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+                
+                if frame is not None:
+                    # Measure latency if timestamp available
+                    if "timestamp" in message:
+                        latency = (time.time() - message["timestamp"]) * 1000
+                        if received_count % 100 == 0:  # Print every 100 frames
+                            print(f"📊 Total latency {cam_name}: {latency:.1f}ms")
                     
-                print(f"📷 {cam_name} frame alındı ({cam_type})")
+                    # cam4 is internal camera for seat detection, others starting with "cam" are external
+                    if cam_name == "cam4":
+                        cam_type = "internal"
+                    elif cam_name.startswith("cam"):
+                        cam_type = "external"
+                    else:
+                        cam_type = "internal"
+                    
+                    data_manager.add_frame(cam_type, cam_name, frame)
+                    
+                    # Non-blocking queue put
+                    try:
+                        if frame_queue.qsize() < Config.FRAME_QUEUE_SIZE:
+                            frame_queue.put_nowait((cam_name, frame))
+                        else:
+                            # Drop oldest frame
+                            try:
+                                frame_queue.get_nowait()
+                                frame_queue.put_nowait((cam_name, frame))
+                            except:
+                                pass
+                    except:
+                        pass
+                    
+                    # Reduced logging for performance
+                    if received_count % 50 == 0:
+                        elapsed = time.time() - start_time
+                        throughput = received_count / elapsed
+                        print(f"📥 Alım hızı: {throughput:.1f} frame/s")
+                        
         except Exception as e:
-            print(f"[HATA] ZMQ alım hatası: {e}")
+            if "Resource temporarily unavailable" not in str(e):
+                print(f"[HATA] ZMQ alım hatası: {e}")
+            time.sleep(0.001)  # Very short sleep on error
 
-# ========== Frame Analyze Worker ==========
+# ========== Frame Analyze Worker (Optimized for low latency) ==========
 def analyze_worker(data_manager, frame_queue):
     while True:
         try:
-            cam_name, frame = frame_queue.get()
+            cam_name, frame = frame_queue.get_nowait()  # Non-blocking get
             
             if frame is None:
-                frame_queue.task_done()
                 continue
             
             # Convert BGR to RGB immediately for consistency
@@ -380,53 +418,54 @@ def analyze_worker(data_manager, frame_queue):
             
             # cam4 is for seat detection (internal), other cam* are for external detection
             if cam_name == "cam4":
-                # Frame skipping for performance
+                # No frame skipping for real-time response
                 data_manager.frame_skip_counter[cam_name] += 1
                 
-                # Save raw cam4 frame for display (always update display)
+                # Always update display frame immediately
                 data_manager.annotated_frames["internal"][cam_name] = display_frame
                 data_manager.cached_gui_frames[cam_name] = display_frame
                 
-                # Only process every Nth frame for seat detection
-                if data_manager.frame_skip_counter[cam_name] % Config.ANALYSIS_SKIP_FRAMES == 0:
-                    print(f"🪑 {cam_name} koltuk analizi başlatılıyor... (Frame #{data_manager.frame_skip_counter[cam_name]})")
+                # Process every frame for real-time response
+                try:
+                    # Convert back to BGR for model processing (YOLO expects BGR)
+                    model_frame = cv2.cvtColor(analysis_frame, cv2.COLOR_RGB2BGR)
+                    seat_states, standing_count = detect_seat_states(model_frame)
+                    sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, seat_states, standing_count)
+                    data_manager.annotated_frames["seat"] = sim_img
+                    data_manager.update_seat_data(seat_states, standing_count)
                     
-                    try:
-                        # Convert back to BGR for model processing (YOLO expects BGR)
-                        model_frame = cv2.cvtColor(analysis_frame, cv2.COLOR_RGB2BGR)
-                        seat_states, standing_count = detect_seat_states(model_frame)
-                        sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, seat_states, standing_count)
-                        data_manager.annotated_frames["seat"] = sim_img
-                        data_manager.update_seat_data(seat_states, standing_count)
-                        
-                        # Save seat simulation to file (less frequently)
-                        if data_manager.frame_skip_counter[cam_name] % (Config.ANALYSIS_SKIP_FRAMES * 3) == 0:
-                            save_seat_simulation(sim_img)
-                        
-                        print(f"✅ Koltuk durumu güncellendi - Dolu: {seat_states.count('occupied')}, Kemerli: {seat_states.count('belted')}, Ayakta: {standing_count}")
-                        
-                        # Add seat-related alerts (less frequent)
+                    # Save seat simulation less frequently to reduce I/O
+                    if data_manager.frame_skip_counter[cam_name] % 30 == 0:  # Every 30 frames
+                        save_seat_simulation(sim_img)
+                    
+                    # Reduced logging - only print significant changes
+                    occupied = seat_states.count('occupied')
+                    belted = seat_states.count('belted')
+                    if data_manager.frame_skip_counter[cam_name] % 20 == 0:  # Every 20 frames
+                        print(f"🪑 {cam_name} - Dolu: {occupied}, Kemerli: {belted}, Ayakta: {standing_count}")
+                    
+                    # Add seat-related alerts (less frequent)
+                    if data_manager.frame_skip_counter[cam_name] % 10 == 0:  # Every 10 frames
                         if standing_count > 3:
                             data_manager.add_alert("internal", cam_name, "warning", 
                                                  f"⚠️ Çok fazla ayakta yolcu: {standing_count}")
                         
                         unbelted_count = seat_states.count("occupied")
-                        if unbelted_count > 0:
+                        if unbelted_count > 2:  # Only alert if more than 2
                             data_manager.add_alert("internal", cam_name, "info", 
                                                  f"ℹ️ Kemersiz yolcu: {unbelted_count}")
                             
-                    except Exception as e:
-                        print(f"[HATA] İç kamera analiz hatası ({cam_name}): {e}")
-                        # Create default seat layout on error
-                        if "seat" not in data_manager.annotated_frames or data_manager.annotated_frames["seat"] is None:
-                            total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
-                            default_states = ["empty"] * total_seats
-                            sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, default_states, 0)
-                            data_manager.annotated_frames["seat"] = sim_img
+                except Exception as e:
+                    print(f"[HATA] İç kamera analiz hatası ({cam_name}): {e}")
+                    # Create default seat layout on error
+                    if "seat" not in data_manager.annotated_frames or data_manager.annotated_frames["seat"] is None:
+                        total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
+                        default_states = ["empty"] * total_seats
+                        sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, default_states, 0)
+                        data_manager.annotated_frames["seat"] = sim_img
                     
             elif cam_name.startswith("cam"):
                 # External camera analysis with YOLOv5 (cam1, cam2, cam3)
-                print(f"🔍 {cam_name} dış kamera analizi...")
                 try:
                     # Convert back to BGR for YOLOv5 model
                     model_frame = cv2.cvtColor(analysis_frame, cv2.COLOR_RGB2BGR)
@@ -485,10 +524,9 @@ def analyze_worker(data_manager, frame_queue):
                     sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, default_states, 0)
                     data_manager.annotated_frames["seat"] = sim_img
                     
-        except Exception as e:
-            print(f"[HATA] AnalyzeWorker genel hatası: {e}")
-        finally:
-            frame_queue.task_done()
+        except:
+            # No frames in queue, very short sleep
+            time.sleep(0.001)  # 1ms sleep
 
 # ========== GUI SINIFI ==========
 class EnhancedGUI:
@@ -723,9 +761,10 @@ if __name__ == "__main__":
     gui = EnhancedGUI(data_manager)
     
     print("✅ Sistem hazır!")
-    print(f"⚙️ Performans ayarları:")
+    print(f"⚙️ Düşük gecikme ayarları:")
     print(f"   - GUI güncelleme: {Config.GUI_UPDATE_INTERVAL}ms")
     print(f"   - Frame queue: {Config.FRAME_QUEUE_SIZE}")
-    print(f"   - Cam4 frame atlama: {Config.ANALYSIS_SKIP_FRAMES}")
+    print(f"   - Cam4 frame atlama: {Config.ANALYSIS_SKIP_FRAMES} (her frame işlenir)")
     print(f"   - Analiz boyutu: {Config.ANALYSIS_SIZE}")
+    print(f"   - ZMQ buffer: 5 frame")
     gui.run()
