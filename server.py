@@ -1,7 +1,7 @@
 import zmq
 import tkinter as tk
 from tkinter import ttk
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 import cv2
 import numpy as np
 import threading
@@ -10,6 +10,8 @@ import time
 import torch
 from datetime import datetime
 from queue import Queue
+from ultralytics import YOLO
+import os
 
 # ========== GENEL AYARLAR ==========
 class Config:
@@ -18,6 +20,8 @@ class Config:
     EXTERNAL_CAM_SIZE = (320, 240)
     INTERNAL_CAM_SIZE = (320, 240)
     MAX_MEMORY_MB = 3072
+    SEAT_MODEL_PATH = "seat_model.pt"
+    SAVE_PATH = "internal_cameras/seat_simulation.jpg"
 
 TARGET_CLASSES = {0: "insan", 2: "arac", 16: "kedi", 17: "kopek"}
 SEAT_MATRIX = [
@@ -32,11 +36,30 @@ SEAT_STATUS_COLOR = {
     "belted": (0, 255, 0)
 }
 
-icon = Image.open("seat_icon.png").convert("RGBA")
+# Load icons and models
+try:
+    icon = Image.open("seat_icon.png").convert("RGBA")
+except FileNotFoundError:
+    print("⚠️ seat_icon.png bulunamadı, varsayılan ikon kullanılacak")
+    # Create a simple default icon
+    icon = Image.new("RGBA", (64, 64), (128, 128, 128, 255))
 
 # ========== MODEL ==========
-model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
-model.to("cpu").eval()
+# External camera model (YOLOv5)
+external_model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
+external_model.to("cpu").eval()
+
+# Internal seat detection model (YOLO)
+try:
+    if os.path.exists(Config.SEAT_MODEL_PATH):
+        seat_model = YOLO(Config.SEAT_MODEL_PATH)
+        print("✅ Koltuk modeli yüklendi")
+    else:
+        print("⚠️ Koltuk modeli bulunamadı, varsayılan model kullanılacak")
+        seat_model = YOLO('yolov8n.pt')  # Fallback to default model
+except Exception as e:
+    print(f"⚠️ Model yükleme hatası: {e}, varsayılan model kullanılacak")
+    seat_model = YOLO('yolov8n.pt')
 
 # ========== DATA MANAGER ==========
 class DataManager:
@@ -44,6 +67,11 @@ class DataManager:
         self.latest_frames = {"external": {}, "internal": {}}
         self.alerts = {"external": {}, "internal": {}}
         self.annotated_frames = {"external": {}, "internal": {}, "seat": None}
+        self.seat_data = {
+            "states": [],
+            "standing_count": 0,
+            "last_update": None
+        }
         self.stats = {
             "start_time": datetime.now(),
             "total_frames": 0,
@@ -68,18 +96,87 @@ class DataManager:
         }
         self.stats["alerts_count"] += 1
 
+    def update_seat_data(self, seat_states, standing_count):
+        """Koltuk verilerini günceller"""
+        self.seat_data["states"] = seat_states
+        self.seat_data["standing_count"] = standing_count
+        self.seat_data["last_update"] = datetime.now()
+
     def get_seat_summary(self):
-        # Dummy example — adapt this to real seat detection logic
+        """Gerçek koltuk verilerini döndürür"""
+        if not self.seat_data["states"]:
+            # Varsayılan değerler
+            total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
+            return {
+                "total_seats": total_seats,
+                "occupied_seats": 0,
+                "belted_seats": 0,
+                "empty_seats": total_seats,
+                "standing_passengers": 0
+            }
+        
+        seat_states = self.seat_data["states"]
+        total_seats = len(seat_states)
+        occupied_seats = seat_states.count("occupied")
+        belted_seats = seat_states.count("belted")
+        empty_seats = seat_states.count("empty")
+        standing_passengers = self.seat_data["standing_count"]
+        
         return {
-            "total_seats": 12,
-            "occupied_seats": 4,
-            "belted_seats": 3,
-            "empty_seats": 5,
-            "standing_passengers": 1
+            "total_seats": total_seats,
+            "occupied_seats": occupied_seats,
+            "belted_seats": belted_seats,
+            "empty_seats": empty_seats,
+            "standing_passengers": standing_passengers
         }
 
 # ========== SEAT UTILS ==========
-def detect_seat_states(class_list):
+def detect_seat_states(frame):
+    """Kameradan alınan görüntüdeki kişi sınıflarını analiz eder ve ayakta olan sayısını döndürür."""
+    try:
+        print(f"🔍 Seat model ile analiz ediliyor... Frame boyutu: {frame.shape}")
+        results = seat_model(frame, verbose=False)[0]
+        
+        # Check if we have any detections
+        if hasattr(results, 'boxes') and results.boxes is not None and len(results.boxes) > 0:
+            class_list = [int(cls) for cls in results.boxes.cls.tolist()]
+            conf_list = [float(conf) for conf in results.boxes.conf.tolist()]
+            print(f"✅ Tespit edilen sınıflar: {class_list}")
+            print(f"✅ Güven skorları: {conf_list}")
+        else:
+            class_list = []
+            print("ℹ️ Hiç tespit yapılamadı")
+        
+        seat_states = []
+        total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
+        standing_count = 0
+
+        for i in range(total_seats):
+            if i < len(class_list):
+                cls = class_list[i]
+                if cls == 2:  # Belted passenger
+                    seat_states.append("belted")
+                elif cls == 1:  # Occupied but not belted
+                    seat_states.append("occupied")
+                else:  # Empty seat, person standing
+                    seat_states.append("empty")
+                    standing_count += 1
+            else:
+                seat_states.append("empty")
+
+        print(f"🪑 Koltuk durumları: {seat_states}")
+        print(f"👥 Ayakta yolcu sayısı: {standing_count}")
+        
+        return seat_states, standing_count
+    
+    except Exception as e:
+        print(f"[HATA] Koltuk durumu tespit hatası: {e}")
+        # Return default empty states on error
+        total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
+        return ["empty"] * total_seats, 0
+
+def detect_seat_states_legacy(class_list):
+    """Eski sürüm - geriye dönük uyumluluk için"""
     seat_states = []
     total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
     standing_count = 0
@@ -98,15 +195,31 @@ def detect_seat_states(class_list):
     return seat_states, standing_count
 
 def draw_seat_layout_with_icon(matrix, states, standing_count):
+    """Koltuk düzenini ikon ve durum renkleriyle çizer"""
     seat_w, seat_h = 80, 80
     margin_x, margin_y = 50, 50
     gap_x, gap_y = 40, 40
+    
     rows = len(matrix)
     cols = max(len(r) for r in matrix)
     img_w = margin_x * 2 + cols * (seat_w + gap_x)
     img_h = margin_y * 2 + rows * (seat_h + gap_y) + 60
+    
     canvas = Image.new("RGBA", (img_w, img_h), (255, 255, 255, 255))
     draw = ImageDraw.Draw(canvas)
+    
+    # Try to use a font, fallback to default if not available
+    try:
+        font = ImageFont.truetype("arial.ttf", 12)
+        title_font = ImageFont.truetype("arial.ttf", 16)
+    except (OSError, IOError):
+        try:
+            font = ImageFont.load_default()
+            title_font = ImageFont.load_default()
+        except:
+            font = None
+            title_font = None
+    
     seat_idx = 0
     for i, row in enumerate(matrix):
         for j, has_seat in enumerate(row):
@@ -115,15 +228,88 @@ def draw_seat_layout_with_icon(matrix, states, standing_count):
                 y = margin_y + i * (seat_h + gap_y)
                 status = states[seat_idx] if seat_idx < len(states) else "empty"
                 color = SEAT_STATUS_COLOR[status]
+                
+                # Create colored icon
                 colored_icon = icon.copy()
                 overlay = Image.new("RGBA", colored_icon.size, color + (100,))
                 colored_icon = Image.alpha_composite(colored_icon, overlay)
+                
+                # Resize and paste icon
                 resized_icon = colored_icon.resize((seat_w, seat_h))
                 canvas.paste(resized_icon, (x, y), resized_icon)
-                draw.text((x + 5, y + 5), str(seat_idx + 1), fill=(0, 0, 0))
+                
+                # Add seat number
+                seat_text = str(seat_idx + 1)
+                if font:
+                    # Calculate text position for centering
+                    text_bbox = draw.textbbox((0, 0), seat_text, font=font)
+                    text_w = text_bbox[2] - text_bbox[0]
+                    text_h = text_bbox[3] - text_bbox[1]
+                    text_x = x + (seat_w - text_w) // 2
+                    text_y = y + (seat_h - text_h) // 2
+                    draw.text((text_x, text_y), seat_text, fill=(0, 0, 0), font=font)
+                else:
+                    draw.text((x + 5, y + 5), seat_text, fill=(0, 0, 0))
+                
                 seat_idx += 1
-    draw.text((img_w - 300, 20), f"Ayakta Yolcu: {standing_count}", fill=(255, 0, 0))
+    
+    # Add standing passenger count with better positioning
+    standing_text = f"Ayakta Yolcu: {standing_count}"
+    if title_font:
+        text_bbox = draw.textbbox((0, 0), standing_text, font=title_font)
+        text_w = text_bbox[2] - text_bbox[0]
+        text_x = img_w - text_w - 20
+        draw.text((text_x, 20), standing_text, fill=(255, 0, 0), font=title_font)
+    else:
+        draw.text((img_w - 200, 20), standing_text, fill=(255, 0, 0))
+    
+    # Add legend
+    legend_y = img_h - 40
+    legend_items = [
+        ("Boş", SEAT_STATUS_COLOR["empty"]),
+        ("Dolu", SEAT_STATUS_COLOR["occupied"]),
+        ("Kemerli", SEAT_STATUS_COLOR["belted"])
+    ]
+    
+    legend_x = 20
+    for text, color in legend_items:
+        # Draw small color indicator
+        draw.rectangle([legend_x, legend_y, legend_x + 15, legend_y + 15], fill=color)
+        # Add text
+        if font:
+            draw.text((legend_x + 20, legend_y), text, fill=(0, 0, 0), font=font)
+        else:
+            draw.text((legend_x + 20, legend_y), text, fill=(0, 0, 0))
+        legend_x += 80
+    
     return np.array(canvas.convert("RGB"))
+
+# ========== UTILITY FUNCTIONS ==========
+def ensure_directories():
+    """Gerekli dizinleri oluşturur"""
+    dirs_to_create = ["internal_cameras"]
+    for directory in dirs_to_create:
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+            print(f"✅ Dizin oluşturuldu: {directory}")
+
+def save_seat_simulation(img_array, save_path=None):
+    """Koltuk simülasyon görüntüsünü kaydeder"""
+    if save_path is None:
+        save_path = Config.SAVE_PATH
+    
+    try:
+        ensure_directories()
+        result = cv2.imwrite(save_path, img_array)
+        if result:
+            print(f"✅ Koltuk simülasyonu güncellendi: {save_path}")
+            return True
+        else:
+            print(f"❌ Koltuk simülasyonu kaydedilemedi: {save_path}")
+            return False
+    except Exception as e:
+        print(f"❌ Koltuk simülasyonu kaydetme hatası: {e}")
+        return False
 
 # ========== ZMQ Receiver ==========
 def zmq_receiver(data_manager, frame_queue):
@@ -138,41 +324,132 @@ def zmq_receiver(data_manager, frame_queue):
             npimg = np.frombuffer(img_bytes, dtype=np.uint8)
             frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
             if frame is not None:
-                cam_type = "external" if cam_name.startswith("cam") else "internal"
+                # cam4 is internal camera for seat detection, others starting with "cam" are external
+                if cam_name == "cam4":
+                    cam_type = "internal"
+                elif cam_name.startswith("cam"):
+                    cam_type = "external"
+                else:
+                    cam_type = "internal"
+                
                 data_manager.add_frame(cam_type, cam_name, frame)
                 if not frame_queue.full():
                     frame_queue.put((cam_name, frame))
+                    
+                print(f"📷 {cam_name} frame alındı ({cam_type})")
         except Exception as e:
             print(f"[HATA] ZMQ alım hatası: {e}")
 
 # ========== Frame Analyze Worker ==========
 def analyze_worker(data_manager, frame_queue):
     while True:
-        cam_name, frame = frame_queue.get()
         try:
+            cam_name, frame = frame_queue.get()
+            
+            if frame is None:
+                frame_queue.task_done()
+                continue
+                
             resized = cv2.resize(frame, (320, 240))
-            results = model(resized)
-            if cam_name.startswith("cam"):
-                found = False
-                for *xyxy, conf, cls in results.xyxy[0]:
-                    cls_id = int(cls)
-                    if cls_id in TARGET_CLASSES:
-                        found = True
-                        x1, y1, x2, y2 = map(int, xyxy)
-                        label = TARGET_CLASSES[cls_id]
-                        cv2.rectangle(resized, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                        cv2.putText(resized, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                if found:
-                    data_manager.add_alert("external", cam_name, "warning", "🚨 TESPİT VAR")
-                data_manager.annotated_frames["external"][cam_name] = resized
+            
+            # cam4 is for seat detection (internal), other cam* are for external detection
+            if cam_name == "cam4":
+                # Internal camera analysis with seat detection using seat_model
+                print(f"🪑 {cam_name} koltuk analizi başlatılıyor...")
+                
+                # Save raw cam4 frame for display
+                data_manager.annotated_frames["internal"][cam_name] = resized.copy()
+                
+                try:
+                    seat_states, standing_count = detect_seat_states(resized)
+                    sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, seat_states, standing_count)
+                    data_manager.annotated_frames["seat"] = sim_img
+                    data_manager.update_seat_data(seat_states, standing_count)
+                    
+                    # Save seat simulation to file
+                    save_seat_simulation(sim_img)
+                    
+                    print(f"✅ Koltuk durumu güncellendi - Dolu: {seat_states.count('occupied')}, Kemerli: {seat_states.count('belted')}, Ayakta: {standing_count}")
+                    
+                    # Add seat-related alerts
+                    if standing_count > 3:  # Too many standing passengers
+                        data_manager.add_alert("internal", cam_name, "warning", 
+                                             f"⚠️ Çok fazla ayakta yolcu: {standing_count}")
+                    
+                    # Check for unbelted passengers
+                    unbelted_count = seat_states.count("occupied")
+                    if unbelted_count > 0:
+                        data_manager.add_alert("internal", cam_name, "info", 
+                                             f"ℹ️ Kemersiz yolcu: {unbelted_count}")
+                        
+                except Exception as e:
+                    print(f"[HATA] İç kamera analiz hatası ({cam_name}): {e}")
+                    # Create default seat layout on error
+                    total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
+                    default_states = ["empty"] * total_seats
+                    sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, default_states, 0)
+                    data_manager.annotated_frames["seat"] = sim_img
+                    
+            elif cam_name.startswith("cam"):
+                # External camera analysis with YOLOv5 (cam1, cam2, cam3)
+                print(f"🔍 {cam_name} dış kamera analizi...")
+                try:
+                    results = external_model(resized)
+                    found = False
+                    
+                    for *xyxy, conf, cls in results.xyxy[0]:
+                        cls_id = int(cls)
+                        if cls_id in TARGET_CLASSES and conf > 0.5:  # Added confidence threshold
+                            found = True
+                            x1, y1, x2, y2 = map(int, xyxy)
+                            label = f"{TARGET_CLASSES[cls_id]} {conf:.2f}"
+                            cv2.rectangle(resized, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                            cv2.putText(resized, label, (x1, y1 - 5), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                    
+                    if found:
+                        data_manager.add_alert("external", cam_name, "warning", "🚨 TESPİT VAR")
+                    
+                    data_manager.annotated_frames["external"][cam_name] = resized
+                    
+                except Exception as e:
+                    print(f"[HATA] Dış kamera analiz hatası ({cam_name}): {e}")
+                    data_manager.annotated_frames["external"][cam_name] = resized
+                    
             else:
-                class_list = [int(cls) for cls in results.pred[0][:, -1].tolist()]
-                seat_states, standing_count = detect_seat_states(class_list)
-                sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, seat_states, standing_count)
-                data_manager.annotated_frames["seat"] = sim_img
+                # Other internal cameras (if any)
+                try:
+                    seat_states, standing_count = detect_seat_states(resized)
+                    sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, seat_states, standing_count)
+                    data_manager.annotated_frames["seat"] = sim_img
+                    data_manager.update_seat_data(seat_states, standing_count)
+                    
+                    # Save seat simulation to file
+                    save_seat_simulation(sim_img)
+                    
+                    # Add seat-related alerts
+                    if standing_count > 3:  # Too many standing passengers
+                        data_manager.add_alert("internal", cam_name, "warning", 
+                                             f"⚠️ Çok fazla ayakta yolcu: {standing_count}")
+                    
+                    # Check for unbelted passengers
+                    unbelted_count = seat_states.count("occupied")
+                    if unbelted_count > 0:
+                        data_manager.add_alert("internal", cam_name, "info", 
+                                             f"ℹ️ Kemersiz yolcu: {unbelted_count}")
+                        
+                except Exception as e:
+                    print(f"[HATA] İç kamera analiz hatası ({cam_name}): {e}")
+                    # Create default seat layout on error
+                    total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
+                    default_states = ["empty"] * total_seats
+                    sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, default_states, 0)
+                    data_manager.annotated_frames["seat"] = sim_img
+                    
         except Exception as e:
-            print(f"[AnalyzeWorker] Hata: {e}")
-        frame_queue.task_done()
+            print(f"[HATA] AnalyzeWorker genel hatası: {e}")
+        finally:
+            frame_queue.task_done()
 
 # ========== GUI SINIFI ==========
 class EnhancedGUI:
@@ -194,6 +471,11 @@ class EnhancedGUI:
     def create_stats_panel(self):
         frame = ttk.LabelFrame(self.main_frame, text="📊 Sistem İstatistikleri", padding=10)
         frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Main stats
+        main_stats_frame = ttk.Frame(frame)
+        main_stats_frame.pack(fill=tk.X, pady=(0, 5))
+        
         self.stats_labels = {}
         stats_info = [
             ("Toplam Frame", "total_frames"),
@@ -204,21 +486,62 @@ class EnhancedGUI:
             ("RAM Kullanımı", "memory")
         ]
         for i, (label, key) in enumerate(stats_info):
-            ttk.Label(frame, text=f"{label}:").grid(row=0, column=i*2, padx=5, sticky=tk.W)
-            self.stats_labels[key] = ttk.Label(frame, text="0", foreground="blue")
+            ttk.Label(main_stats_frame, text=f"{label}:").grid(row=0, column=i*2, padx=5, sticky=tk.W)
+            self.stats_labels[key] = ttk.Label(main_stats_frame, text="0", foreground="blue")
             self.stats_labels[key].grid(row=0, column=i*2+1, padx=5, sticky=tk.W)
+        
+        # Seat statistics
+        seat_frame = ttk.LabelFrame(frame, text="🪑 Koltuk Durumu", padding=5)
+        seat_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        self.seat_labels = {}
+        seat_info = [
+            ("Toplam Koltuk", "total_seats"),
+            ("Dolu", "occupied_seats"),
+            ("Kemerli", "belted_seats"),
+            ("Boş", "empty_seats"),
+            ("Ayakta", "standing_passengers")
+        ]
+        for i, (label, key) in enumerate(seat_info):
+            ttk.Label(seat_frame, text=f"{label}:").grid(row=0, column=i*2, padx=5, sticky=tk.W)
+            color = "green" if key == "belted_seats" else "red" if key == "standing_passengers" else "blue"
+            self.seat_labels[key] = ttk.Label(seat_frame, text="0", foreground=color)
+            self.seat_labels[key].grid(row=0, column=i*2+1, padx=5, sticky=tk.W)
+            
         return frame
 
     def create_camera_panel(self):
         frame = ttk.Frame(self.main_frame)
         frame.pack(fill=tk.BOTH, expand=True)
+        
+        # External cameras row
+        external_frame = ttk.LabelFrame(frame, text="🔍 Dış Kameralar", padding=5)
+        external_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Internal cameras row  
+        internal_frame = ttk.LabelFrame(frame, text="🪑 İç Kameralar", padding=5)
+        internal_frame.pack(fill=tk.X, pady=(5, 0))
+        
         self.cam_labels = {}
-        for cam_name in ["cam1", "cam2", "cam3", "seat"]:
-            subframe = ttk.LabelFrame(frame, text=cam_name.upper(), padding=5)
+        
+        # External cameras (cam1, cam2, cam3)
+        for cam_name in ["cam1", "cam2", "cam3"]:
+            subframe = ttk.Frame(external_frame)
             subframe.pack(side=tk.LEFT, padx=5, pady=5)
+            ttk.Label(subframe, text=cam_name.upper(), font=("Arial", 10, "bold")).pack()
             label = ttk.Label(subframe)
             label.pack()
             self.cam_labels[cam_name] = label
+        
+        # Internal cameras (cam4 raw and seat simulation)
+        for cam_name, display_name in [("cam4", "CAM4 (Ham Görüntü)"), ("seat", "KOLTUK SİMÜLASYONU")]:
+            subframe = ttk.Frame(internal_frame)
+            subframe.pack(side=tk.LEFT, padx=5, pady=5)
+            ttk.Label(subframe, text=display_name, font=("Arial", 10, "bold")).pack()
+            label = ttk.Label(subframe)
+            label.pack()
+            self.cam_labels[cam_name] = label
+            
         return frame
 
     def create_info_panel(self):
@@ -229,6 +552,7 @@ class EnhancedGUI:
         return frame
 
     def update_gui(self):
+        # Update system statistics
         stats = self.data_manager.stats
         uptime = datetime.now() - stats["start_time"]
         self.stats_labels["uptime"].config(text=str(uptime).split('.')[0])
@@ -236,23 +560,82 @@ class EnhancedGUI:
         self.stats_labels["memory"].config(text=f"{mem_mb:.1f} MB")
         for key in ["total_frames", "external_frames", "internal_frames", "alerts_count"]:
             self.stats_labels[key].config(text=str(stats[key]))
+        
+        # Update seat statistics
+        seat_summary = self.data_manager.get_seat_summary()
+        for key, value in seat_summary.items():
+            if key in self.seat_labels:
+                self.seat_labels[key].config(text=str(value))
+        
+        # Update camera frames
         for cam_name, label in self.cam_labels.items():
             frame = None
             if cam_name in ["cam1", "cam2", "cam3"]:
+                # External cameras
                 frame = self.data_manager.annotated_frames["external"].get(cam_name)
+            elif cam_name == "cam4":
+                # Internal camera raw feed (also check internal frames)
+                frame = self.data_manager.annotated_frames["internal"].get(cam_name)
+                if frame is None:
+                    # Fallback to latest raw frame
+                    frame = self.data_manager.latest_frames["internal"].get(cam_name)
             elif cam_name == "seat":
+                # Seat simulation
                 frame = self.data_manager.annotated_frames["seat"]
+            
             if frame is not None:
-                resized = cv2.resize(frame, Config.EXTERNAL_CAM_SIZE)
-                rgb_frame = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-                img = ImageTk.PhotoImage(Image.fromarray(rgb_frame))
-                label.configure(image=img)
-                label.image = img
+                try:
+                    # Ensure frame is in the right format
+                    if len(frame.shape) == 3:
+                        if frame.shape[2] == 3:  # RGB
+                            rgb_frame = frame
+                        else:  # BGR
+                            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    else:
+                        continue  # Skip invalid frames
+                        
+                    resized = cv2.resize(rgb_frame, Config.EXTERNAL_CAM_SIZE)
+                    img = ImageTk.PhotoImage(Image.fromarray(resized))
+                    label.configure(image=img)
+                    label.image = img  # Keep a reference
+                except Exception as e:
+                    print(f"[GUI] Frame güncelleme hatası ({cam_name}): {e}")
+            else:
+                # Show placeholder if no frame available
+                placeholder = np.zeros((Config.EXTERNAL_CAM_SIZE[1], Config.EXTERNAL_CAM_SIZE[0], 3), dtype=np.uint8)
+                placeholder.fill(64)  # Gray background
+                
+                # Add text indicating no signal
+                if cam_name == "cam4":
+                    cv2.putText(placeholder, "CAM4 BEKLIYOR", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                elif cam_name == "seat":
+                    cv2.putText(placeholder, "KOLTUK SIM.", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                else:
+                    cv2.putText(placeholder, f"{cam_name.upper()}", (100, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                try:
+                    img = ImageTk.PhotoImage(Image.fromarray(placeholder))
+                    label.configure(image=img)
+                    label.image = img
+                except:
+                    pass
+        
+        # Update alerts
         self.alert_text.delete(1.0, tk.END)
-        for cam_type in ["external"]:
+        alert_count = 0
+        for cam_type in ["external", "internal"]:
             for cam_name, alert in self.data_manager.alerts[cam_type].items():
-                timestamp = alert["timestamp"].strftime("%H:%M:%S")
-                self.alert_text.insert(tk.END, f"[{timestamp}] {alert['level']} - {cam_name}: {alert['message']}\n")
+                if alert_count < 20:  # Limit alerts display
+                    timestamp = alert["timestamp"].strftime("%H:%M:%S")
+                    level_emoji = "🚨" if alert["level"] == "warning" else "ℹ️" if alert["level"] == "info" else "⚠️"
+                    self.alert_text.insert(tk.END, 
+                                         f"[{timestamp}] {level_emoji} {cam_name}: {alert['message']}\n")
+                    alert_count += 1
+        
+        # Scroll to bottom of alerts
+        self.alert_text.see(tk.END)
+        
+        # Schedule next update
         self.root.after(500, self.update_gui)
 
     def start_update_loop(self):
@@ -263,9 +646,25 @@ class EnhancedGUI:
 
 # ========== ANA ==========
 if __name__ == "__main__":
+    print("🚌 Akıllı Servis Monitoring Sistemi Başlatılıyor...")
+    
+    # Ensure required directories exist
+    ensure_directories()
+    
+    # Initialize data manager and frame queue
     data_manager = DataManager()
     frame_queue = Queue(maxsize=10)
+    
+    # Start worker threads
+    print("📊 Analiz thread'i başlatılıyor...")
     threading.Thread(target=analyze_worker, args=(data_manager, frame_queue), daemon=True).start()
+    
+    print("📡 ZMQ alıcısı başlatılıyor...")
     threading.Thread(target=zmq_receiver, args=(data_manager, frame_queue), daemon=True).start()
+    
+    # Initialize and start GUI
+    print("🖥️ GUI başlatılıyor...")
     gui = EnhancedGUI(data_manager)
+    
+    print("✅ Sistem hazır!")
     gui.run()
