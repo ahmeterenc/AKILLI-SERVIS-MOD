@@ -20,8 +20,6 @@ class Config:
     EXTERNAL_CAM_SIZE = (320, 240)
     INTERNAL_CAM_SIZE = (320, 240)
     MAX_MEMORY_MB = 3072
-    SEAT_MODEL_PATH = "models/seat_model.pt"
-    SAVE_PATH = "internal_cameras/seat_simulation.jpg"
     
     # Performance optimizations (Reduced latency)
     GUI_UPDATE_INTERVAL = 100  # milliseconds (reduced from 200 for even faster updates)
@@ -42,32 +40,6 @@ SEAT_STATUS_COLOR = {
     "occupied": (0, 0, 255),
     "belted": (0, 255, 0)
 }
-
-# Load icons and models
-try:
-    icon = Image.open("seat_icon.png").convert("RGBA")
-except FileNotFoundError:
-    print("⚠️ seat_icon.png bulunamadı, varsayılan ikon kullanılacak")
-    # Create a simple default icon
-    icon = Image.new("RGBA", (64, 64), (128, 128, 128, 255))
-
-# ========== MODEL ==========
-# External camera model (YOLOv5)
-external_model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
-external_model.to("cpu").eval()
-
-# Internal seat detection model (YOLO)
-try:
-    if os.path.exists(Config.SEAT_MODEL_PATH):
-        seat_model = YOLO(Config.SEAT_MODEL_PATH)
-        print("✅ Koltuk modeli yüklendi")
-    else:
-        print("⚠️ Koltuk modeli bulunamadı, varsayılan model kullanılacak")
-        seat_model = YOLO('yolov8n.pt')  # Fallback to default model
-except Exception as e:
-    print(f"⚠️ Model yükleme hatası: {e}, varsayılan model kullanılacak")
-    seat_model = YOLO('yolov8n.pt')
-
 # ========== DATA MANAGER ==========
 class DataManager:
     def __init__(self):
@@ -140,187 +112,6 @@ class DataManager:
             "standing_passengers": standing_passengers
         }
 
-# ========== SEAT UTILS ==========
-def detect_seat_states(frame):
-    """Kameradan alınan görüntüdeki kişi sınıflarını analiz eder ve ayakta olan sayısını döndürür."""
-    try:
-        results = seat_model(frame, verbose=False)[0]
-        
-        # Check if we have any detections
-        if hasattr(results, 'boxes') and results.boxes is not None and len(results.boxes) > 0:
-            class_list = [int(cls) for cls in results.boxes.cls.tolist()]
-            conf_list = [float(conf) for conf in results.boxes.conf.tolist()]
-            # Reduced logging for performance
-            if len(class_list) > 0:
-                print(f"✅ Tespit: {len(class_list)} obje, en yüksek güven: {max(conf_list):.2f}")
-        else:
-            class_list = []
-        
-        seat_states = []
-        total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
-        standing_count = 0
-
-        for i in range(total_seats):
-            if i < len(class_list):
-                cls = class_list[i]
-                if cls == 2:  # Belted passenger
-                    seat_states.append("belted")
-                elif cls == 1:  # Occupied but not belted
-                    seat_states.append("occupied")
-                else:  # Empty seat, person standing
-                    seat_states.append("empty")
-                    standing_count += 1
-            else:
-                seat_states.append("empty")
-
-        # Reduced logging for performance
-        if len(class_list) > 0:
-            print(f"🪑 Dolu: {seat_states.count('occupied')}, Kemerli: {seat_states.count('belted')}, Ayakta: {standing_count}")
-        
-        return seat_states, standing_count
-    
-    except Exception as e:
-        print(f"[HATA] Koltuk durumu tespit hatası: {e}")
-        # Return default empty states on error
-        total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
-        return ["empty"] * total_seats, 0
-
-def detect_seat_states_legacy(class_list):
-    """Eski sürüm - geriye dönük uyumluluk için"""
-    seat_states = []
-    total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
-    standing_count = 0
-    for i in range(total_seats):
-        if i < len(class_list):
-            cls = class_list[i]
-            if cls == 2:
-                seat_states.append("belted")
-            elif cls == 1:
-                seat_states.append("occupied")
-            else:
-                seat_states.append("empty")
-                standing_count += 1
-        else:
-            seat_states.append("empty")
-    return seat_states, standing_count
-
-def draw_seat_layout_with_icon(matrix, states, standing_count):
-    """Koltuk düzenini ikon ve durum renkleriyle çizer"""
-    seat_w, seat_h = 80, 80
-    margin_x, margin_y = 50, 50
-    gap_x, gap_y = 40, 40
-    
-    rows = len(matrix)
-    cols = max(len(r) for r in matrix)
-    img_w = margin_x * 2 + cols * (seat_w + gap_x)
-    img_h = margin_y * 2 + rows * (seat_h + gap_y) + 60
-    
-    canvas = Image.new("RGBA", (img_w, img_h), (255, 255, 255, 255))
-    draw = ImageDraw.Draw(canvas)
-    
-    # Try to use a font, fallback to default if not available
-    try:
-        font = ImageFont.truetype("arial.ttf", 12)
-        title_font = ImageFont.truetype("arial.ttf", 16)
-    except (OSError, IOError):
-        try:
-            font = ImageFont.load_default()
-            title_font = ImageFont.load_default()
-        except:
-            font = None
-            title_font = None
-    
-    seat_idx = 0
-    for i, row in enumerate(matrix):
-        for j, has_seat in enumerate(row):
-            if has_seat == 1:
-                x = margin_x + j * (seat_w + gap_x)
-                y = margin_y + i * (seat_h + gap_y)
-                status = states[seat_idx] if seat_idx < len(states) else "empty"
-                color = SEAT_STATUS_COLOR[status]
-                
-                # Create colored icon
-                colored_icon = icon.copy()
-                overlay = Image.new("RGBA", colored_icon.size, color + (100,))
-                colored_icon = Image.alpha_composite(colored_icon, overlay)
-                
-                # Resize and paste icon
-                resized_icon = colored_icon.resize((seat_w, seat_h))
-                canvas.paste(resized_icon, (x, y), resized_icon)
-                
-                # Add seat number
-                seat_text = str(seat_idx + 1)
-                if font:
-                    # Calculate text position for centering
-                    text_bbox = draw.textbbox((0, 0), seat_text, font=font)
-                    text_w = text_bbox[2] - text_bbox[0]
-                    text_h = text_bbox[3] - text_bbox[1]
-                    text_x = x + (seat_w - text_w) // 2
-                    text_y = y + (seat_h - text_h) // 2
-                    draw.text((text_x, text_y), seat_text, fill=(0, 0, 0), font=font)
-                else:
-                    draw.text((x + 5, y + 5), seat_text, fill=(0, 0, 0))
-                
-                seat_idx += 1
-    
-    # Add standing passenger count with better positioning
-    standing_text = f"Ayakta Yolcu: {standing_count}"
-    if title_font:
-        text_bbox = draw.textbbox((0, 0), standing_text, font=title_font)
-        text_w = text_bbox[2] - text_bbox[0]
-        text_x = img_w - text_w - 20
-        draw.text((text_x, 20), standing_text, fill=(255, 0, 0), font=title_font)
-    else:
-        draw.text((img_w - 200, 20), standing_text, fill=(255, 0, 0))
-    
-    # Add legend
-    legend_y = img_h - 40
-    legend_items = [
-        ("Boş", SEAT_STATUS_COLOR["empty"]),
-        ("Dolu", SEAT_STATUS_COLOR["occupied"]),
-        ("Kemerli", SEAT_STATUS_COLOR["belted"])
-    ]
-    
-    legend_x = 20
-    for text, color in legend_items:
-        # Draw small color indicator
-        draw.rectangle([legend_x, legend_y, legend_x + 15, legend_y + 15], fill=color)
-        # Add text
-        if font:
-            draw.text((legend_x + 20, legend_y), text, fill=(0, 0, 0), font=font)
-        else:
-            draw.text((legend_x + 20, legend_y), text, fill=(0, 0, 0))
-        legend_x += 80
-    
-    return np.array(canvas.convert("RGB"))
-
-# ========== UTILITY FUNCTIONS ==========
-def ensure_directories():
-    """Gerekli dizinleri oluşturur"""
-    dirs_to_create = ["internal_cameras"]
-    for directory in dirs_to_create:
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-            print(f"✅ Dizin oluşturuldu: {directory}")
-
-def save_seat_simulation(img_array, save_path=None):
-    """Koltuk simülasyon görüntüsünü kaydeder"""
-    if save_path is None:
-        save_path = Config.SAVE_PATH
-    
-    try:
-        ensure_directories()
-        result = cv2.imwrite(save_path, img_array)
-        if result:
-            print(f"✅ Koltuk simülasyonu güncellendi: {save_path}")
-            return True
-        else:
-            print(f"❌ Koltuk simülasyonu kaydedilemedi: {save_path}")
-            return False
-    except Exception as e:
-        print(f"❌ Koltuk simülasyonu kaydetme hatası: {e}")
-        return False
-
 # ========== ZMQ Receiver (Optimized for low latency) ==========
 def zmq_receiver(data_manager, frame_queue):
     context = zmq.Context()
@@ -389,146 +180,8 @@ def zmq_receiver(data_manager, frame_queue):
                 print(f"[HATA] ZMQ alım hatası: {e}")
             time.sleep(0.001)  # Very short sleep on error
 
-# ========== Frame Analyze Worker (Optimized for low latency) ==========
-def analyze_worker(data_manager, frame_queue):
-    while True:
-        try:
-            cam_name, frame = frame_queue.get_nowait()  # Non-blocking get
-            
-            if frame is None:
-                continue
-            
-            # Convert BGR to RGB immediately for consistency
-            if len(frame.shape) == 3 and frame.shape[2] == 3:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            else:
-                frame_rgb = frame
-                
-            # Resize for processing efficiency
-            if Config.RESIZE_BEFORE_ANALYSIS:
-                if cam_name == "cam4":
-                    analysis_frame = cv2.resize(frame_rgb, Config.ANALYSIS_SIZE)
-                    display_frame = cv2.resize(frame_rgb, Config.EXTERNAL_CAM_SIZE)
-                else:
-                    analysis_frame = cv2.resize(frame_rgb, (320, 240))
-                    display_frame = analysis_frame.copy()
-            else:
-                analysis_frame = cv2.resize(frame_rgb, (320, 240))
-                display_frame = analysis_frame.copy()
-            
-            # cam4 is for seat detection (internal), other cam* are for external detection
-            if cam_name == "cam4":
-                # No frame skipping for real-time response
-                data_manager.frame_skip_counter[cam_name] += 1
-                
-                # Always update display frame immediately
-                data_manager.annotated_frames["internal"][cam_name] = display_frame
-                data_manager.cached_gui_frames[cam_name] = display_frame
-                
-                # Process every frame for real-time response
-                try:
-                    # Convert back to BGR for model processing (YOLO expects BGR)
-                    model_frame = cv2.cvtColor(analysis_frame, cv2.COLOR_RGB2BGR)
-                    seat_states, standing_count = detect_seat_states(model_frame)
-                    sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, seat_states, standing_count)
-                    data_manager.annotated_frames["seat"] = sim_img
-                    data_manager.update_seat_data(seat_states, standing_count)
-                    
-                    # Save seat simulation less frequently to reduce I/O
-                    if data_manager.frame_skip_counter[cam_name] % 30 == 0:  # Every 30 frames
-                        save_seat_simulation(sim_img)
-                    
-                    # Reduced logging - only print significant changes
-                    occupied = seat_states.count('occupied')
-                    belted = seat_states.count('belted')
-                    if data_manager.frame_skip_counter[cam_name] % 20 == 0:  # Every 20 frames
-                        print(f"🪑 {cam_name} - Dolu: {occupied}, Kemerli: {belted}, Ayakta: {standing_count}")
-                    
-                    # Add seat-related alerts (less frequent)
-                    if data_manager.frame_skip_counter[cam_name] % 10 == 0:  # Every 10 frames
-                        if standing_count > 3:
-                            data_manager.add_alert("internal", cam_name, "warning", 
-                                                 f"⚠️ Çok fazla ayakta yolcu: {standing_count}")
-                        
-                        unbelted_count = seat_states.count("occupied")
-                        if unbelted_count > 2:  # Only alert if more than 2
-                            data_manager.add_alert("internal", cam_name, "info", 
-                                                 f"ℹ️ Kemersiz yolcu: {unbelted_count}")
-                            
-                except Exception as e:
-                    print(f"[HATA] İç kamera analiz hatası ({cam_name}): {e}")
-                    # Create default seat layout on error
-                    if "seat" not in data_manager.annotated_frames or data_manager.annotated_frames["seat"] is None:
-                        total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
-                        default_states = ["empty"] * total_seats
-                        sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, default_states, 0)
-                        data_manager.annotated_frames["seat"] = sim_img
-                    
-            elif cam_name.startswith("cam"):
-                # External camera analysis with YOLOv5 (cam1, cam2, cam3)
-                try:
-                    # Convert back to BGR for YOLOv5 model
-                    model_frame = cv2.cvtColor(analysis_frame, cv2.COLOR_RGB2BGR)
-                    results = external_model(model_frame)
-                    found = False
-                    
-                    # Work on display frame (RGB) for annotations
-                    annotated_frame = display_frame.copy()
-                    
-                    for *xyxy, conf, cls in results.xyxy[0]:
-                        cls_id = int(cls)
-                        if cls_id in TARGET_CLASSES and conf > 0.5:
-                            found = True
-                            x1, y1, x2, y2 = map(int, xyxy)
-                            label = f"{TARGET_CLASSES[cls_id]} {conf:.2f}"
-                            # Draw on RGB frame
-                            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)  # Red in RGB
-                            cv2.putText(annotated_frame, label, (x1, y1 - 5), 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-                    
-                    if found:
-                        data_manager.add_alert("external", cam_name, "warning", "🚨 TESPİT VAR")
-                    
-                    data_manager.annotated_frames["external"][cam_name] = annotated_frame
-                    data_manager.cached_gui_frames[cam_name] = annotated_frame
-                    
-                except Exception as e:
-                    print(f"[HATA] Dış kamera analiz hatası ({cam_name}): {e}")
-                    data_manager.annotated_frames["external"][cam_name] = display_frame
-                    data_manager.cached_gui_frames[cam_name] = display_frame
-                    
-            else:
-                # Other internal cameras (if any)
-                try:
-                    model_frame = cv2.cvtColor(analysis_frame, cv2.COLOR_RGB2BGR)
-                    seat_states, standing_count = detect_seat_states(model_frame)
-                    sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, seat_states, standing_count)
-                    data_manager.annotated_frames["seat"] = sim_img
-                    data_manager.update_seat_data(seat_states, standing_count)
-                    
-                    save_seat_simulation(sim_img)
-                    
-                    if standing_count > 3:
-                        data_manager.add_alert("internal", cam_name, "warning", 
-                                             f"⚠️ Çok fazla ayakta yolcu: {standing_count}")
-                    
-                    unbelted_count = seat_states.count("occupied")
-                    if unbelted_count > 0:
-                        data_manager.add_alert("internal", cam_name, "info", 
-                                             f"ℹ️ Kemersiz yolcu: {unbelted_count}")
-                        
-                except Exception as e:
-                    print(f"[HATA] İç kamera analiz hatası ({cam_name}): {e}")
-                    total_seats = sum(cell for row in SEAT_MATRIX for cell in row)
-                    default_states = ["empty"] * total_seats
-                    sim_img = draw_seat_layout_with_icon(SEAT_MATRIX, default_states, 0)
-                    data_manager.annotated_frames["seat"] = sim_img
-                    
-        except:
-            # No frames in queue, very short sleep
-            time.sleep(0.001)  # 1ms sleep
 
-# ========== GUI SINIFI ==========
+# ========= GUI SINIFI ==========
 class EnhancedGUI:
     def __init__(self, data_manager):
         self.data_manager = data_manager
@@ -741,18 +394,11 @@ class EnhancedGUI:
 # ========== ANA ==========
 if __name__ == "__main__":
     print("🚌 Akıllı Servis Monitoring Sistemi Başlatılıyor...")
-    
-    # Ensure required directories exist
-    ensure_directories()
-    
+
     # Initialize data manager and frame queue
     data_manager = DataManager()
     frame_queue = Queue(maxsize=Config.FRAME_QUEUE_SIZE)  # Optimized queue size
-    
-    # Start worker threads
-    print("📊 Analiz thread'i başlatılıyor...")
-    threading.Thread(target=analyze_worker, args=(data_manager, frame_queue), daemon=True).start()
-    
+
     print("📡 ZMQ alıcısı başlatılıyor...")
     threading.Thread(target=zmq_receiver, args=(data_manager, frame_queue), daemon=True).start()
     
