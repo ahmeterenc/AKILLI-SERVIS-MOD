@@ -20,7 +20,7 @@ class Config:
     EXTERNAL_CAM_SIZE = (320, 240)
     INTERNAL_CAM_SIZE = (320, 240)
     MAX_MEMORY_MB = 3072
-    SEAT_MODEL_PATH = "seat_model.pt"
+    SEAT_MODEL_PATH = "models/seat_model.pt"
     SAVE_PATH = "internal_cameras/seat_simulation.jpg"
     
     # Performance optimizations (Reduced latency)

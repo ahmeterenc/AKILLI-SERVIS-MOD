@@ -14,7 +14,7 @@ SEAT_MATRIX = [
 ]
 
 SAVE_PATH = "internal_cameras/seat_simulation.jpg"
-MODEL_PATH = "seat_model.pt"
+MODEL_PATH = "models/seat_model.pt"
 
 SEAT_STATUS_COLOR = {
     "empty": (180, 180, 180),
