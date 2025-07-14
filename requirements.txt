@@ -1,7 +1,8 @@
-numpy==2.2.6
+numpy==1.26.4
 opencv-python==4.11.0.86
 ultralytics==8.3.144
 psutil==7.0.0
 pyzmq==26.4.0
 torch==2.7.0
-pillow==11.2.1
+pillow==10.4.0
+degirum==0.17.1

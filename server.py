@@ -116,69 +116,66 @@ class DataManager:
 def zmq_receiver(data_manager, frame_queue):
     context = zmq.Context()
     socket = context.socket(zmq.PULL)
-    
-    # Optimize ZMQ for low latency
-    socket.setsockopt(zmq.RCVHWM, 5)  # High water mark
-    socket.setsockopt(zmq.LINGER, 0)  # Don't wait on close
+    socket.setsockopt(zmq.RCVHWM, 5)
+    socket.setsockopt(zmq.LINGER, 0)
     socket.bind("tcp://*:5555")
-    
+
     print("📡 ZMQ alıcısı düşük gecikme modunda başlatıldı")
     received_count = 0
     start_time = time.time()
-    
+
     while True:
         try:
-            # Non-blocking receive with short timeout
-            if socket.poll(timeout=1):  # 1ms timeout
+            if socket.poll(timeout=1):
                 message = socket.recv_json(zmq.NOBLOCK)
                 received_count += 1
-                
+
                 cam_name = message["cam"]
                 img_bytes = bytes.fromhex(message["img"])
                 npimg = np.frombuffer(img_bytes, dtype=np.uint8)
                 frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-                
+
                 if frame is not None:
-                    # Measure latency if timestamp available
                     if "timestamp" in message:
                         latency = (time.time() - message["timestamp"]) * 1000
-                        if received_count % 100 == 0:  # Print every 100 frames
+                        if received_count % 100 == 0:
                             print(f"📊 Total latency {cam_name}: {latency:.1f}ms")
-                    
-                    # cam4 is internal camera for seat detection, others starting with "cam" are external
+
                     if cam_name == "cam4":
                         cam_type = "internal"
                     elif cam_name.startswith("cam"):
                         cam_type = "external"
                     else:
                         cam_type = "internal"
-                    
+
+                    # Kaydet
                     data_manager.add_frame(cam_type, cam_name, frame)
-                    
-                    # Non-blocking queue put
+
+                    # 🔥 Yeni: Görüntüyü annotated_frames'e de ekle
+                    if cam_type == "external":
+                        data_manager.annotated_frames["external"][cam_name] = frame
+                    else:
+                        data_manager.annotated_frames["internal"][cam_name] = frame
+
+                    # Queue push
                     try:
                         if frame_queue.qsize() < Config.FRAME_QUEUE_SIZE:
                             frame_queue.put_nowait((cam_name, frame))
                         else:
-                            # Drop oldest frame
-                            try:
-                                frame_queue.get_nowait()
-                                frame_queue.put_nowait((cam_name, frame))
-                            except:
-                                pass
+                            frame_queue.get_nowait()
+                            frame_queue.put_nowait((cam_name, frame))
                     except:
                         pass
-                    
-                    # Reduced logging for performance
+
                     if received_count % 50 == 0:
                         elapsed = time.time() - start_time
                         throughput = received_count / elapsed
                         print(f"📥 Alım hızı: {throughput:.1f} frame/s")
-                        
+
         except Exception as e:
             if "Resource temporarily unavailable" not in str(e):
                 print(f"[HATA] ZMQ alım hatası: {e}")
-            time.sleep(0.001)  # Very short sleep on error
+            time.sleep(0.001)
 
 
 # ========= GUI SINIFI ==========
@@ -306,10 +303,10 @@ class EnhancedGUI:
                 frame = self.data_manager.cached_gui_frames[cam_name]
             elif cam_name in ["cam1", "cam2", "cam3"]:
                 # External cameras
-                frame = self.data_manager.annotated_frames["external"].get(cam_name)
+                frame = self.data_manager.latest_frames["external"].get(cam_name)
             elif cam_name == "cam4":
                 # Internal camera raw feed
-                frame = self.data_manager.annotated_frames["internal"].get(cam_name)
+                frame = self.data_manager.latest_frames["internal"].get(cam_name)
                 if frame is None:
                     frame = self.data_manager.latest_frames["internal"].get(cam_name)
                     if frame is not None and len(frame.shape) == 3:
