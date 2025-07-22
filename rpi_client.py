@@ -72,13 +72,28 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
         result = model(frame)
         detections = parse_result_string(str(result))
 
+        label_map = {
+            "person": "İnsan",
+            "car": "Araba",
+            "truck": "Kamyon",
+            "bus": "Otobüs",
+            "dog": "Köpek",
+            "cat": "Kedi"
+        }
+
         for det in detections:
             if det["score"] < 0.3:
                 continue
+
+            label_en = det["label"]
+            if label_en not in label_map:
+                continue  # İstenmeyen etiket, atla
+
+            label_tr = label_map[label_en]
             x1, y1, x2, y2 = map(int, det["bbox"])
-            label = f"{det['label']} {det['score']:.2f}"
+            label_text = f"{label_tr} {det['score']:.2f}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, label, (x1, max(0, y1 - 10)),
+            cv2.putText(frame, label_text, (x1, max(0, y1 - 10)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         # JPEG encode
