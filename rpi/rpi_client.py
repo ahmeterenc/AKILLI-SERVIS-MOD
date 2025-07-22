@@ -16,7 +16,7 @@ CAMERA_LIST = [
 ZMQ_TARGET = "tcp://192.168.137.1:5555"  # Alıcı cihaz IP
 TARGET_FPS = 10
 JPEG_QUALITY = 80
-MODEL_NAME = "yolov8n_coco--640x640_quant_hailort_multidevice_1"
+MODEL_NAME = "external_model/yolov8n_coco--640x640_quant_hailort_multidevice_1"
 
 # ==== Yardımcı Fonksiyonlar ====
 def parse_result_string(result_str):
