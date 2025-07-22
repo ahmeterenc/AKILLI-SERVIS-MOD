@@ -1,9 +1,8 @@
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QGridLayout, QTextEdit, QGroupBox, QSpacerItem, QSizePolicy
+from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QGridLayout, QTextEdit, QGroupBox, QSpacerItem, QSizePolicy, QHBoxLayout
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont
 import time
 import cv2
-
 
 class MonitoringGUI(QWidget):
     def __init__(self, data_manager):
@@ -40,12 +39,25 @@ class MonitoringGUI(QWidget):
         cam_box.setLayout(cam_layout)
         main_layout.addWidget(cam_box)
 
-        # === Alert kutusu en altta ===
+        # === Alt alan: Alert + Log ===
+        bottom_layout = QHBoxLayout()
+
+        # ⚠️ Uyarı kutusu
         self.alert_box = QTextEdit()
         self.alert_box.setReadOnly(True)
-        self.alert_box.setMaximumHeight(100)
-        main_layout.addWidget(self.alert_box)
+        self.alert_box.setMaximumHeight(120)
+        self.alert_box.setMinimumWidth(400)
+        self.alert_box.setStyleSheet("background-color: #1e1e1e; color: red; font-family: monospace;")
+        bottom_layout.addWidget(self.alert_box)
 
+        # 🧠 Detection log kutusu
+        self.detection_log_box = QTextEdit()
+        self.detection_log_box.setReadOnly(True)
+        self.detection_log_box.setMaximumHeight(120)
+        self.detection_log_box.setStyleSheet("background-color: #1e1e1e; color: white; font-family: monospace;")
+        bottom_layout.addWidget(self.detection_log_box)
+
+        main_layout.addLayout(bottom_layout)
         self.setLayout(main_layout)
 
     def draw_fps_overlay(self, pixmap, fps_text):
@@ -87,3 +99,21 @@ class MonitoringGUI(QWidget):
                 label.setPixmap(pixmap)
             else:
                 label.setText(cam_name.upper())
+
+        # 🔴 Alert mesajlarını yazdır
+        for cam, alert in alerts.items():
+            self.alert_box.append(f"[{cam}] ({alert['level']}): {alert['message']}")
+
+        # 🧠 Detection loglarını yazdır
+        logs = self.data_manager.get_latest_detection_logs(count=5)
+        self.detection_log_box.clear()
+        for log in logs:
+            cam = log["cam"]
+            ts = time.strftime("%H:%M:%S", time.localtime(log["timestamp"]))
+            self.detection_log_box.append(f"<b>[{cam}] {ts}</b>")
+            for det in log["detections"]:
+                label = det["label"]
+                score = det["score"]
+                color = "green" if score >= 0.7 else "orange" if score >= 0.4 else "red"
+                self.detection_log_box.append(f"<span style='color:{color}'>  - {label} ({score:.2f})</span>")
+            self.detection_log_box.append("<hr>")

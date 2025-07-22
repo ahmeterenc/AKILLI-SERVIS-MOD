@@ -31,6 +31,9 @@ def start_zmq_receiver(data_manager, frame_queue):
                     if frame is not None and cam_name in ALL_CAMERAS:
                         cam_type = "external" if cam_name in EXTERNAL_CAMERAS else "internal"
                         data_manager.add_frame(cam_type, cam_name, frame)
+                        detections = msg.get("detections", [])
+                        timestamp = msg.get("timestamp", time.time())
+                        data_manager.add_detection_log(cam_name, detections, timestamp)
 
                         try:
                             if frame_queue.qsize() < 10:
