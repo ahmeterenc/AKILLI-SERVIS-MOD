@@ -24,7 +24,7 @@ SEAT_STATUS_COLOR = {
 
 model = YOLO(MODEL_PATH)
 cap = cv2.VideoCapture(0)
-icon = Image.open("seat_icon.png").convert("RGBA")
+icon = Image.open("monitor/seat_icon.png").convert("RGBA")
 def detect_seat_states(frame):
     """Kameradan alınan görüntüdeki kişi sınıflarını analiz eder ve ayakta olan sayısını döndürür."""
     results = model(frame, verbose=False)[0]

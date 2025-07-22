@@ -10,7 +10,8 @@ CAMERA_LIST = [
     (0, "cam1"),
     (2, "cam2"),
     (4, "cam3"),
-    (6, "cam4")
+    (6, "cam4"),
+    (8, "cam5"),
 ]
 ZMQ_TARGET = "tcp://192.168.137.1:5555"  # Alıcı cihaz IP
 TARGET_FPS = 10
@@ -91,7 +92,8 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
         message = {
             "cam": cam_name,
             "img": jpeg_bytes.hex(),
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "detections": detections
         }
 
         try:

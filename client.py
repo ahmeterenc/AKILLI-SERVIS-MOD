@@ -35,7 +35,7 @@ EXTERNAL_MODEL_PATH = "models/yolov5nu.pt"
 # ==== Model Yükleme ====
 seat_model = YOLO(SEAT_MODEL_PATH)
 external_model = YOLO(EXTERNAL_MODEL_PATH)
-seat_icon = Image.open("seat_icon.png").convert("RGBA")
+seat_icon = Image.open("monitor/seat_icon.png").convert("RGBA")
 
 # ==== ZMQ Context ====
 context = zmq.Context()
