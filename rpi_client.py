@@ -81,15 +81,13 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
             "cat": "Kedi"
         }
 
+        detections = [det for det in detections if det["label"] in label_map]
+
         for det in detections:
             if det["score"] < 0.3:
                 continue
 
-            label_en = det["label"]
-            if label_en not in label_map:
-                continue  # İstenmeyen etiket, atla
-
-            label_tr = label_map[label_en]
+            label_tr = label_map[det["label"]]
             x1, y1, x2, y2 = map(int, det["bbox"])
             label_text = f"{label_tr} {det['score']:.2f}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
