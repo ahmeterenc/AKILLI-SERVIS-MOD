@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import cv2
 import degirum as dg
 import zmq
@@ -15,12 +13,12 @@ CAMERA_LIST = [
     (6, "cam4"),
     (8, "cam5"),
 ]
-ZMQ_TARGET = "tcp://192.168.137.1:5555"  # Alıcı cihaz IP
+ZMQ_TARGET = "tcp://192.168.137.1:5555"
 TARGET_FPS = 10
 JPEG_QUALITY = 80
-EXTERNAL_MODEL = "yolov8n_coco--640x640_quant_hailort"
+EXTERNAL_MODEL_NAME = "yolov8n_coco--640x640_quant_hailort_multidevice_1"
+INTERNAL_MODEL_NAME = "sitting_seats_model"
 
-# ==== Yardımcı Fonksiyonlar ====
 def parse_result_string(result_str):
     boxes = []
     pattern = re.compile(r"bbox: \[([0-9eE\.\-, ]+)\].*?label: (\w+).*?score: ([0-9eE\.\-]+)", re.DOTALL)
@@ -33,7 +31,6 @@ def parse_result_string(result_str):
 def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
     print(f"🎥 {cam_name} başlatılıyor (kamera {camera_index})")
 
-    # Kamera aç
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         print(f"❌ {cam_name} kamera açılamadı!")
@@ -44,19 +41,19 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
     cap.set(cv2.CAP_PROP_FPS, TARGET_FPS)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 
-    # Degirum model
+    # Model seçimi
+    model_name = EXTERNAL_MODEL_NAME if cam_name in ["cam1", "cam2", "cam3"] else INTERNAL_MODEL_NAME
+    model_path = "external_model" if cam_name in ["cam1", "cam2", "cam3"] else "internal_model"
     try:
-        # Load the model
         model = dg.load_model(
-            model_name=EXTERNAL_MODEL,
+            model_name=model_name,
             inference_host_address='@local',
-            zoo_url='external_model/'
+            zoo_url=f'home/emeltek/Desktop/AKILLI-SERVIS-MOD/rpi/{model_path}/'
         )
     except Exception as e:
         print(f"❌ {cam_name} model yüklenemedi: {e}")
         return
 
-    # ZMQ bağlantı
     context = zmq.Context()
     socket = context.socket(zmq.PUSH)
     socket.connect(zmq_target)
@@ -74,7 +71,6 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
             time.sleep(0.1)
             continue
 
-        # Inference
         result = model(frame)
         detections = parse_result_string(str(result))
 
@@ -92,22 +88,20 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
         for det in detections:
             if det["score"] < 0.3:
                 continue
-
             label_tr = label_map[det["label"]]
             x1, y1, x2, y2 = map(int, det["bbox"])
             label_text = f"{label_tr} {det['score']:.2f}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label_text, (x1, max(0, y1 - 10)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # JPEG encode
         ret, jpeg = cv2.imencode('.jpg', frame, encode_param)
         if not ret:
             print(f"❌ {cam_name} JPEG encode başarısız")
             continue
         jpeg_bytes = jpeg.tobytes()
 
-        # ZMQ mesajı
         message = {
             "cam": cam_name,
             "img": jpeg_bytes.hex(),
@@ -120,20 +114,17 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
         except zmq.Again:
             print(f"⚠️ {cam_name} ZMQ buffer dolu, kare atlandı")
 
-        # FPS takibi
         frame_count += 1
         if frame_count % (TARGET_FPS * 5) == 0:
             elapsed = time.time() - start_time
             fps = frame_count / elapsed
             print(f"📤 {cam_name} gönderim FPS: {fps:.1f}")
 
-        # FPS uyumlu gecikme
         elapsed = time.time() - last_sent
         if elapsed < frame_interval:
             time.sleep(frame_interval - elapsed)
         last_sent = time.time()
 
-# ==== Ana Başlatma ====
 if __name__ == "__main__":
     processes = []
     for cam_idx, cam_name in CAMERA_LIST:
