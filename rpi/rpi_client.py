@@ -18,7 +18,7 @@ CAMERA_LIST = [
 ZMQ_TARGET = "tcp://192.168.137.1:5555"  # Alıcı cihaz IP
 TARGET_FPS = 10
 JPEG_QUALITY = 80
-EXTERNAL_MODEL = Path("models/yolov8n_coco--640x640_quant_hailort.hef")
+EXTERNAL_MODEL = Path("external_model/yolov8n_coco--640x640_quant_hailort.hef")
 
 # ==== Yardımcı Fonksiyonlar ====
 def parse_result_string(result_str):
@@ -46,8 +46,8 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
 
     # Degirum model
     try:
-        zoo = dg.connect(dg.LOCAL)
-        model = zoo.load_model(EXTERNAL_MODEL)
+        device = dg.Device()
+        model = device.load_model(EXTERNAL_MODEL)
     except Exception as e:
         print(f"❌ {cam_name} model yüklenemedi: {e}")
         return
