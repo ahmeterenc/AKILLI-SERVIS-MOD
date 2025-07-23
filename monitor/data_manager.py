@@ -39,9 +39,13 @@ class DataManager:
             "detections": detections
         })
 
-        # log boyutunu sınırlı tut
         if len(self.detections_log) > 100:
-            self.detections_log.pop(0)
+            self.detections_log = self.detections_log[-100:]
+
+    def print_latest_detection_logs(self, count=5):
+        logs = self.get_latest_detection_logs(count)
+        for log in logs:
+            print(f"[{log['timestamp']}] {log['cam']} - {log['detections']}")
 
     def add_frame(self, cam_type, cam_name, frame):
         self.latest_frames[cam_type][cam_name] = frame

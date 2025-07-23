@@ -17,7 +17,7 @@ ZMQ_TARGET = "tcp://192.168.137.1:5555"
 TARGET_FPS = 10
 JPEG_QUALITY = 80
 EXTERNAL_MODEL_NAME = "yolov8n_coco--640x640_quant_hailort_multidevice_1"
-INTERNAL_MODEL_NAME = "sitting_seats_model"
+INTERNAL_MODEL_NAME = "yolov8n_coco--640x640_quant_hailort_multidevice_1"
 
 def parse_result_string(result_str):
     boxes = []
@@ -43,12 +43,12 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
 
     # Model seçimi
     model_name = EXTERNAL_MODEL_NAME if cam_name in ["cam1", "cam2", "cam3"] else INTERNAL_MODEL_NAME
-    model_path = "external_model" if cam_name in ["cam1", "cam2", "cam3"] else "internal_model"
+    model_path = "external_model" if cam_name in ["cam1", "cam2", "cam3"] else "external_model"
     try:
         model = dg.load_model(
             model_name=model_name,
             inference_host_address='@local',
-            zoo_url=f'home/emeltek/Desktop/AKILLI-SERVIS-MOD/rpi/{model_path}/'
+            zoo_url=f'/home/emeltek/Desktop/AKILLI-SERVIS-MOD/rpi/{model_path}/'
         )
     except Exception as e:
         print(f"❌ {cam_name} model yüklenemedi: {e}")
@@ -83,14 +83,19 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
             "cat": "Kedi"
         }
 
-        detections = [det for det in detections if det["label"] in label_map]
-
+        # Filtrele ve label'ları Türkçeleştir
+        filtered_detections = []
         for det in detections:
-            if det["score"] < 0.3:
-                continue
-            label_tr = label_map[det["label"]]
+            if det["label"] in label_map and det["score"] >= 0.3:
+                det["label"] = label_map[det["label"]]  # Türkçeleştir
+                filtered_detections.append(det)
+
+        detections = filtered_detections
+
+        # Kutuları çiz
+        for det in detections:
             x1, y1, x2, y2 = map(int, det["bbox"])
-            label_text = f"{label_tr} {det['score']:.2f}"
+            label_text = f"{det['label']} {det['score']:.2f}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label_text, (x1, max(0, y1 - 10)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
