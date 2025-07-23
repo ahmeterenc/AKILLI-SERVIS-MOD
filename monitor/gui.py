@@ -78,14 +78,6 @@ class MonitoringGUI(QWidget):
         main_layout.addLayout(bottom_layout)
         self.setLayout(main_layout)
 
-    def draw_fps_overlay(self, pixmap, fps_text):
-        painter = QPainter(pixmap)
-        painter.setPen(QColor("lime"))
-        painter.setFont(QFont("Arial", 14))
-        painter.drawText(10, 25, fps_text)
-        painter.end()
-        return pixmap
-
     def start_timer(self):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_gui)
@@ -149,9 +141,7 @@ class MonitoringGUI(QWidget):
                 img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
                 pixmap = QPixmap.fromImage(img).scaled(self.cam_width, self.cam_height, Qt.KeepAspectRatio)
                 now = time.time()
-                fps = 1.0 / max(0.001, now - self.fps_times[cam_name])
                 self.fps_times[cam_name] = now
-                pixmap = self.draw_fps_overlay(pixmap, f"{fps:.1f} FPS")
                 pixmap = self.rounded_pixmap(pixmap, 12)  # köşe yuvarlatma
                 label.setPixmap(pixmap)
 
