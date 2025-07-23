@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QGridLayout, QTextEdit, QGroupBox, QHBoxLayout, QSizePolicy
 from PySide6.QtCore import QTimer, Qt, QCoreApplication
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QGuiApplication
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QGuiApplication, QPainterPath
 import time
 import cv2
 
@@ -91,6 +91,29 @@ class MonitoringGUI(QWidget):
         self.timer.timeout.connect(self.update_gui)
         self.timer.start(100)
 
+    def rounded_pixmap(self, pixmap, radius):
+        mask = QPixmap(pixmap.size())
+        mask.fill(Qt.transparent)
+
+        painter = QPainter(mask)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(Qt.white)
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(pixmap.rect(), radius, radius)
+        painter.end()
+
+        rounded = QPixmap(pixmap.size())
+        rounded.fill(Qt.transparent)
+
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setClipPath(QPainterPath())
+        painter.setClipRegion(mask.createMaskFromColor(Qt.transparent, Qt.MaskInColor))
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+
+        return rounded
+
     def update_gui(self):
         alerts = self.data_manager.alerts["external"] | self.data_manager.alerts["internal"]
         self.alert_box.clear()
@@ -129,7 +152,9 @@ class MonitoringGUI(QWidget):
                 fps = 1.0 / max(0.001, now - self.fps_times[cam_name])
                 self.fps_times[cam_name] = now
                 pixmap = self.draw_fps_overlay(pixmap, f"{fps:.1f} FPS")
+                pixmap = self.rounded_pixmap(pixmap, 12)  # köşe yuvarlatma
                 label.setPixmap(pixmap)
+
             else:
                 label.setText(cam_name.upper())
 
