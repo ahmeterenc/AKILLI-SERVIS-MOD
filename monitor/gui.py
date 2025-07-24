@@ -1,14 +1,23 @@
 from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QGridLayout, QTextEdit, QGroupBox, QHBoxLayout, QSizePolicy
 from PySide6.QtCore import QTimer, Qt, QCoreApplication
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QGuiApplication, QPainterPath
+from PySide6.QtGui import QImage, QFont, QGuiApplication, QPainterPath, QColor, QPixmap, QPainter
 import time
+import os
 import cv2
+
+SEAT_MATRIX = [
+    [1, 1, 0, 1],
+    [1, 1, 0, 1],
+    [1, 1, 0, 1],
+    [1, 1, 1, 1]
+]
 
 class MonitoringGUI(QWidget):
     def __init__(self, data_manager):
         super().__init__()
         self.data_manager = data_manager
         self.setWindowTitle("🚌 Akıllı Servis Uygulaması")
+        self.seat_icon = QPixmap("seat_icon.png").scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
         # Ekran çözünürlüğünü al
         screen_geometry = QGuiApplication.primaryScreen().geometry()
@@ -32,6 +41,62 @@ class MonitoringGUI(QWidget):
         self.setup_ui()
         self.start_timer()
         self.showFullScreen()
+
+    def render_seat_layout(self):
+        seat_states = self.data_manager.seat_data["states"]
+        if not seat_states:
+            seat_states = ["empty"] * sum(sum(row) for row in SEAT_MATRIX)
+
+        icon_size = 40
+        spacing_x = 15
+        spacing_y = 20
+        padding_top = 30  # 👈 üst boşluk eklendi
+
+        total_rows = len(SEAT_MATRIX)
+        total_cols = len(SEAT_MATRIX[0])
+
+        width = total_cols * (icon_size + spacing_x)
+        height = total_rows * (icon_size + spacing_y) + padding_top
+
+        canvas = QPixmap(width, height)
+        canvas.fill(Qt.transparent)
+
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.Antialiasing)
+        idx = 0
+
+        for row in range(total_rows):
+            for col in range(total_cols):
+                if SEAT_MATRIX[row][col] == 0:
+                    continue
+
+                # Koltuk durumu belirle
+                state = seat_states[idx] if idx < len(seat_states) else "empty"
+
+                if state == "empty":
+                    color = QColor(150, 150, 150, 230)
+                elif state == "occupied":
+                    color = QColor(255, 165, 0, 230)
+                elif state == "belted":
+                    color = QColor(0, 200, 0, 230)
+                else:
+                    color = QColor(200, 200, 200, 230)
+
+                x = col * (icon_size + spacing_x)
+                y = padding_top + row * (icon_size + spacing_y)  # 👈 üst boşluk eklendi
+
+                # Koltuk ikonuna renk uygula
+                tinted = self.seat_icon.copy()
+                tint_painter = QPainter(tinted)
+                tint_painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+                tint_painter.fillRect(tinted.rect(), color)
+                tint_painter.end()
+
+                painter.drawPixmap(x, y, tinted)
+                idx += 1
+
+        painter.end()
+        return canvas
 
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -164,5 +229,10 @@ class MonitoringGUI(QWidget):
                     label.setStyleSheet("background-color: black; border: 3px solid red; border-radius: 12px;")
                 else:
                     label.setStyleSheet("background-color: black; border: none; border-radius: 12px;")
+            elif cam_name == "seat":
+                pixmap = self.render_seat_layout().scaled(self.cam_width, self.cam_height, Qt.KeepAspectRatio)
+                pixmap = self.rounded_pixmap(pixmap, 12)
+                label.setPixmap(pixmap)
+                continue
             else:
                 label.setStyleSheet("background-color: black; border-radius: 12px;")

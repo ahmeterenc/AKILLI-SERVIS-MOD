@@ -17,7 +17,7 @@ ZMQ_TARGET = "tcp://192.168.137.1:5555"
 TARGET_FPS = 10
 JPEG_QUALITY = 80
 EXTERNAL_MODEL_NAME = "yolov8n_coco--640x640_quant_hailort_multidevice_1"
-INTERNAL_MODEL_NAME = "yolov8n_coco--640x640_quant_hailort_multidevice_1"
+INTERNAL_MODEL_NAME = "seat_simulation"
 
 def parse_result_string(result_str):
     boxes = []
@@ -43,7 +43,7 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
 
     # Model seçimi
     model_name = EXTERNAL_MODEL_NAME if cam_name in ["cam1", "cam2", "cam3"] else INTERNAL_MODEL_NAME
-    model_path = "external_model" if cam_name in ["cam1", "cam2", "cam3"] else "external_model"
+    model_path = "external_model" if cam_name in ["cam1", "cam2", "cam3"] else "internal_model"
     try:
         model = dg.load_model(
             model_name=model_name,
@@ -75,11 +75,11 @@ def send_camera(camera_index, cam_name, zmq_target=ZMQ_TARGET):
         detections = parse_result_string(str(result))
 
         label_map = {
-            "person": "İnsan",
+            "person": "Insan",
             "car": "Araba",
             "truck": "Kamyon",
-            "bus": "Otobüs",
-            "dog": "Köpek",
+            "bus": "Otobus",
+            "dog": "Kopek",
             "cat": "Kedi"
         }
 
