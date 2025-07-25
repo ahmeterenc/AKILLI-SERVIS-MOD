@@ -1,0 +1,35 @@
+{
+    "ConfigVersion": 11,
+    "Checksum":  "",                                                      
+    "DEVICE": [
+        {
+            "DeviceType":      "HAILO8L",
+            "RuntimeAgent":    "HAILORT",
+            "SupportedDeviceTypes": "HAILORT/HAILO8L"
+        }
+    ],
+
+    "PRE_PROCESS": [
+        {
+            "InputN":        1,
+            "InputH":        640,
+            "InputW":        640,
+            "InputC":        3,
+            "InputQuantEn":  true               
+        }
+    ],
+
+    "MODEL_PARAMETERS": [
+        {
+            "ModelPath": "seat_simulation.hef"
+        }
+    ],
+
+    "POST_PROCESS": [
+        {
+            "OutputPostprocessType": "DetectionYoloHailo",
+            "OutputNumClasses":      3,         
+            "LabelsPath":            "labels_seat_simulation.json"
+        }
+    ]
+}
