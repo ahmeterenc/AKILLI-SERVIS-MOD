@@ -1,6 +1,6 @@
 {
     "ConfigVersion": 11,
-    "Checksum":  "",                                                      
+    "Checksum":  "3E58820639D937F26C6E44B8D1042A65D6A2F31DB3C97AF7A7687D66BDACA23B",
     "DEVICE": [
         {
             "DeviceType":      "HAILO8L",
@@ -28,8 +28,9 @@
     "POST_PROCESS": [
         {
             "OutputPostprocessType": "DetectionYoloHailo",
-            "OutputNumClasses":      3,         
-            "LabelsPath":            "labels_seat_simulation.json"
+            "PythonFile": "DetectionYoloHailo.py",
+            "OutputNumClasses": 3,
+            "LabelsPath": "labels_seat_simulation.json"
         }
     ]
 }
