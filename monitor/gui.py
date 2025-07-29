@@ -72,15 +72,14 @@ class MonitoringGUI(QWidget):
 
                 # Koltuk durumu belirle
                 state = seat_states[idx] if idx < len(seat_states) else "empty"
-
                 if state == "empty":
-                    color = QColor(150, 150, 150, 230)
+                    color = QColor(255, 0, 0, 230)  # 🔴 Kırmızı (empty)
                 elif state == "occupied":
-                    color = QColor(255, 165, 0, 230)
+                    color = QColor(255, 215, 0, 230)  # 🟡 Sarı (occupied)
                 elif state == "belted":
-                    color = QColor(0, 200, 0, 230)
+                    color = QColor(0, 200, 0, 230)  # 🟢 Yeşil (belted)
                 else:
-                    color = QColor(200, 200, 200, 230)
+                    color = QColor(200, 200, 200, 230)  # Gri (varsayılan – bilinmeyen)
 
                 x = col * (icon_size + spacing_x)
                 y = padding_top + row * (icon_size + spacing_y)  # 👈 üst boşluk eklendi
